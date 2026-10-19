@@ -1,0 +1,53 @@
+package ua.spokiy.trevoga;
+
+import android.app.Notification;
+import android.app.NotificationManager;
+import android.content.Context;
+import android.content.SharedPreferences;
+import android.os.Build;
+
+final class Prefs {
+    static final String NAME = "trevoga";
+    static final String REGION = "region", TOKEN = "token", PARTIAL = "partial", ENABLED = "enabled",
+            STATE = "state", STATUS_TIME = "status_time", ERROR = "error", SOURCE = "source",
+            ASKED_BATTERY = "asked_battery";
+
+    static final String CH_STATUS = "status", CH_ALERT = "alert_v1";
+
+    static SharedPreferences get(Context c) {
+        return c.getSharedPreferences(NAME, Context.MODE_PRIVATE);
+    }
+
+    static String region(Context c) {
+        return get(c).getString(REGION, "м. Київ");
+    }
+
+    /** Каналы уведомлений (Android 8+). Создаём через рефлексию — проект собирается против API 23. */
+    static void createChannels(Context c) {
+        if (Build.VERSION.SDK_INT < 26) return;
+        try {
+            NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
+            Class<?> chCls = Class.forName("android.app.NotificationChannel");
+            Object st = chCls.getConstructor(String.class, CharSequence.class, int.class)
+                    .newInstance(CH_STATUS, "Статус слежения", 2 /* IMPORTANCE_LOW */);
+            Object al = chCls.getConstructor(String.class, CharSequence.class, int.class)
+                    .newInstance(CH_ALERT, "Тревога и отбой", 4 /* IMPORTANCE_HIGH */);
+            chCls.getMethod("setSound", android.net.Uri.class, android.media.AudioAttributes.class)
+                    .invoke(al, null, null); // звук играет само приложение
+            chCls.getMethod("enableVibration", boolean.class).invoke(al, false);
+            NotificationManager.class.getMethod("createNotificationChannel", chCls).invoke(nm, st);
+            NotificationManager.class.getMethod("createNotificationChannel", chCls).invoke(nm, al);
+        } catch (Throwable ignored) { }
+    }
+
+    @SuppressWarnings("deprecation")
+    static Notification.Builder builder(Context c, String channel) {
+        if (Build.VERSION.SDK_INT >= 26) {
+            try {
+                return (Notification.Builder) Notification.Builder.class
+                        .getConstructor(Context.class, String.class).newInstance(c, channel);
+            } catch (Throwable ignored) { }
+        }
+        return new Notification.Builder(c);
+    }
+}
