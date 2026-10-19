@@ -1,0 +1,15 @@
+Windows Registry Editor Version 5.00
+
+; Enables TLS 1.2 for .NET programs on Windows 7 (needed only if Trevoga shows connection errors)
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Microsoft\.NETFramework\v4.0.30319]
+"SchUseStrongCrypto"=dword:00000001
+"SystemDefaultTlsVersions"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SOFTWARE\Wow6432Node\Microsoft\.NETFramework\v4.0.30319]
+"SchUseStrongCrypto"=dword:00000001
+"SystemDefaultTlsVersions"=dword:00000001
+
+[HKEY_LOCAL_MACHINE\SYSTEM\CurrentControlSet\Control\SecurityProviders\SCHANNEL\Protocols\TLS 1.2\Client]
+"Enabled"=dword:00000001
+"DisabledByDefault"=dword:00000000
