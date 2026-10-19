@@ -1,2 +1,4 @@
 build/
 *.keystore
+*.idsig
+Trevoga.apk
