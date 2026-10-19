@@ -130,15 +130,16 @@ public class MonitorService extends Service {
             return; // при запуске звук не играем, только показываем статус
         }
         if (added.contains("ballistic_missiles")) {
-            Sounds.playBallistic(this);                    // балістика — отдельный срочный сигнал
+            Sounds.ballistic(this, old == AlertSource.CLEAR, threats);                    // балістика — отдельный срочный сигнал
             alertNotification("БАЛІСТИКА!", region + ". Негайно в укриття!");
         } else if (old == AlertSource.CLEAR && result == AlertSource.ALERT) {
-            Sounds.play(this, true);
+            Sounds.alarm(this, threats);
             alertNotification("ПОВІТРЯНА ТРИВОГА!", region + ". Пройдіть в укриття!" + (th.length() > 0 ? "\n" + th : ""));
         } else if (old == AlertSource.ALERT && result == AlertSource.ALERT && !added.isEmpty()) {
+            Sounds.newThreats(this, added);
             alertNotification("Нова загроза", region + ": " + AlertSource.titles(added));
         } else if (old == AlertSource.ALERT && result == AlertSource.CLEAR) {
-            Sounds.play(this, false);
+            Sounds.clear(this);
             alertNotification("Відбій тривоги", region);
         }
     }

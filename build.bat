@@ -8,7 +8,10 @@ if not exist "%CSC%" (
   pause
   exit /b 1
 )
-"%CSC%" /nologo /target:winexe /optimize+ /codepage:65001 /r:System.Windows.Forms.dll /r:System.Drawing.dll /out:Trevoga.exe Trevoga.cs
+rem Voice clips from the voice folder are embedded into the exe
+set RES=
+for %%f in (voice\*.wav) do call set RES=%%RES%% /resource:"voice\%%~nxf",voice.%%~nxf
+"%CSC%" /nologo /target:winexe /optimize+ /codepage:65001 /r:System.Windows.Forms.dll /r:System.Drawing.dll %RES% /out:Trevoga.exe Trevoga.cs
 if errorlevel 1 (
   echo BUILD FAILED
 ) else (

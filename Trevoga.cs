@@ -64,6 +64,7 @@ namespace Trevoga
         public int Interval = 15;          // секунд между проверками
         public bool Partial = false;       // считать частичную тревогу (только alerts.in.ua)
         public bool Sound = true;
+        public string Voice = "tetiana";  // tetiana, mykyta, off
 
         static string FilePath
         {
@@ -91,6 +92,7 @@ namespace Trevoga
                     else if (k == "interval" && int.TryParse(v, out n)) s.Interval = n;
                     else if (k == "partial") s.Partial = (v == "1" || v.ToLower() == "true");
                     else if (k == "sound") s.Sound = !(v == "0" || v.ToLower() == "false");
+                    else if (k == "voice" && (v == "tetiana" || v == "mykyta" || v == "off")) s.Voice = v;
                 }
             }
             catch { }
@@ -110,12 +112,14 @@ namespace Trevoga
                 sb.AppendLine("; interval - как часто проверять, секунд (минимум 10)");
                 sb.AppendLine("; partial  - 1 = считать тревогой и частичную (в части района/области), только с токеном");
                 sb.AppendLine("; sound    - 1 = звук включён, 0 = выключен");
+                sb.AppendLine("; voice    - голос: tetiana (жіночий), mykyta (чоловічий), off (без голосу)");
                 sb.AppendLine("region=" + Region);
                 sb.AppendLine("raion=" + Raion);
                 sb.AppendLine("token=" + Token);
                 sb.AppendLine("interval=" + Interval);
                 sb.AppendLine("partial=" + (Partial ? "1" : "0"));
                 sb.AppendLine("sound=" + (Sound ? "1" : "0"));
+                sb.AppendLine("voice=" + Voice);
                 File.WriteAllText(FilePath, sb.ToString(), new UTF8Encoding(true));
             }
             catch { }
@@ -395,12 +399,17 @@ namespace Trevoga
     {
         static SoundPlayer player;
         static bool mciOpen;
+        static int gen = 0;                       // меняется при Stop — отменяет очередь «голос → сирена»
+        public static string Voice = "tetiana";   // tetiana, mykyta, off
+        public static Control Ui;                 // окно, в потоке которого играем основные звуки
+        public const int KindNone = -1, KindAlarm = 0, KindClear = 1, KindBallistic = 2;
 
         [DllImport("winmm.dll", CharSet = CharSet.Unicode)]
         static extern int mciSendString(string command, StringBuilder ret, int retLen, IntPtr callback);
 
         public static void Stop()
         {
+            gen++;
             try { if (player != null) player.Stop(); } catch { }
             try { if (mciOpen) { mciSendString("close trevoga_snd", null, 0, IntPtr.Zero); mciOpen = false; } } catch { }
         }
@@ -418,9 +427,8 @@ namespace Trevoga
         }
 
         // Срочный сигнал «Балістика»: частые чередующиеся высокие тона (~8 сек)
-        public static void PlayBallistic()
+        static void MainBallistic()
         {
-            Stop();
             try
             {
                 string f = Path.Combine(Application.StartupPath, "ballistic.wav");
@@ -456,9 +464,8 @@ namespace Trevoga
             return ToWav(buf);
         }
 
-        public static void Play(bool alarm)
+        static void MainSound(bool alarm)
         {
-            Stop();
             try
             {
                 string custom = CustomFile(alarm);
@@ -485,6 +492,124 @@ namespace Trevoga
         }
 
         const int Rate = 22050;
+
+        // ---- Голос: клипы вшиты в exe как ресурсы voice.<голос>_<фраза>.wav (22050 Гц, моно, 16 бит)
+        static short[] ReadWav(Stream st)
+        {
+            BinaryReader r = new BinaryReader(st);
+            r.ReadBytes(12);                                      // RIFF....WAVE
+            while (st.Position < st.Length)
+            {
+                string id = Encoding.ASCII.GetString(r.ReadBytes(4));
+                int len = r.ReadInt32();
+                if (id == "data")
+                {
+                    short[] d = new short[len / 2];
+                    for (int i = 0; i < d.Length; i++) d[i] = r.ReadInt16();
+                    return d;
+                }
+                r.ReadBytes(len + (len & 1));
+            }
+            return new short[0];
+        }
+
+        static short[] Clip(string key)
+        {
+            try
+            {
+                Stream st = typeof(Sounds).Assembly.GetManifestResourceStream("voice." + Voice + "_" + key + ".wav");
+                if (st == null) return null;
+                using (st) return ReadWav(st);
+            }
+            catch { return null; }
+        }
+
+        // Склеивает фразы с паузами в один WAV. null — если голос выключен или фраз нет.
+        static byte[] VoiceWav(List<string> keys)
+        {
+            if (Voice == "off" || keys == null || keys.Count == 0) return null;
+            List<short> all = new List<short>();
+            foreach (string k in keys)
+            {
+                short[] c = Clip(k);
+                if (c == null) continue;
+                all.AddRange(c);
+                all.AddRange(new short[(int)(Rate * 0.25)]);
+            }
+            if (all.Count == 0) return null;
+            all.AddRange(new short[(int)(Rate * 0.3)]);
+            return ToWav(all.ToArray());
+        }
+
+        static void PlayMain(int kind)
+        {
+            if (kind == KindAlarm) MainSound(true);
+            else if (kind == KindClear) MainSound(false);
+            else if (kind == KindBallistic) MainBallistic();
+        }
+
+        // Сначала голос (фразы keys), потом основной звук kind
+        public static void Play(List<string> keys, int kind)
+        {
+            Stop();
+            int my = gen;
+            byte[] voice = VoiceWav(keys);
+            if (voice == null) { PlayMain(kind); return; }
+            Thread t = new Thread(delegate()
+            {
+                try
+                {
+                    SoundPlayer vp = new SoundPlayer(new MemoryStream(voice));
+                    player = vp;
+                    vp.PlaySync();
+                }
+                catch { }
+                if (my != gen || kind == KindNone) return;
+                try
+                {
+                    if (Ui != null && Ui.IsHandleCreated)
+                        Ui.BeginInvoke((MethodInvoker)delegate { if (my == gen) PlayMain(kind); });
+                    else PlayMain(kind);
+                }
+                catch { }
+            });
+            t.IsBackground = true;
+            t.Start();
+        }
+
+        static List<string> L(params string[] a) { return new List<string>(a); }
+
+        // Готовые сценарии
+        public static void Alarm(List<string> threats)
+        {
+            List<string> k = L("alert");
+            int n = 0;
+            foreach (string t in threats) if (n++ < 4) k.Add(t);
+            k.Add("shelter");
+            Play(k, KindAlarm);
+        }
+
+        public static void Ballistic(bool alertStarted, List<string> threats)
+        {
+            List<string> k = alertStarted ? L("alert") : L("attention");
+            k.Add("ballistic_missiles");
+            int n = 0;
+            foreach (string t in threats) if (t != "ballistic_missiles" && n++ < 3) k.Add(t);
+            k.Add("now");
+            Play(k, KindBallistic);
+        }
+
+        public static void NewThreats(List<string> added)
+        {
+            List<string> k = L("attention");
+            k.AddRange(added);
+            Play(k, KindNone);
+        }
+
+        public static void Clear()
+        {
+            Play(L("clear"), KindClear);
+        }
 
         static byte[] ToWav(short[] samples)
         {
@@ -582,6 +707,7 @@ namespace Trevoga
         List<string> threats = new List<string>();
         DateTime lastThreatFetch = DateTime.MinValue;
         CheckBox chkSound, chkAutorun;
+        ComboBox cbVoice;
         Button btnTestAlarm, btnTestClear, btnStop;
         NotifyIcon tray;
         System.Windows.Forms.Timer timer;
@@ -601,7 +727,7 @@ namespace Trevoga
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(420, 362);
+            ClientSize = new Size(420, 396);
             Icon = SystemIcons.Shield;
 
             Label l1 = new Label();
@@ -695,16 +821,36 @@ namespace Trevoga
             chkAutorun.CheckedChanged += delegate { SetAutorun(chkAutorun.Checked); };
             Controls.Add(chkAutorun);
 
-            btnTestAlarm = MakeButton("Тест тревоги", 14, 274);
-            btnTestAlarm.Click += delegate { Sounds.Play(true); };
-            btnTestClear = MakeButton("Тест отбоя", 148, 274);
-            btnTestClear.Click += delegate { Sounds.Play(false); };
-            btnStop = MakeButton("Стоп звук", 282, 274);
+            Label lv = new Label();
+            lv.Text = "Голос:";
+            lv.Location = new Point(14, 276);
+            lv.AutoSize = true;
+            Controls.Add(lv);
+            cbVoice = new ComboBox();
+            cbVoice.DropDownStyle = ComboBoxStyle.DropDownList;
+            cbVoice.Location = new Point(85, 272);
+            cbVoice.Width = 320;
+            cbVoice.Items.AddRange(new object[] { "Жіночий (Тетяна)", "Чоловічий (Микита)", "Без голосу, тільки сирена" });
+            cbVoice.SelectedIndex = settings.Voice == "mykyta" ? 1 : settings.Voice == "off" ? 2 : 0;
+            Sounds.Voice = settings.Voice;
+            cbVoice.SelectedIndexChanged += delegate
+            {
+                settings.Voice = cbVoice.SelectedIndex == 1 ? "mykyta" : cbVoice.SelectedIndex == 2 ? "off" : "tetiana";
+                Sounds.Voice = settings.Voice;
+                settings.Save();
+            };
+            Controls.Add(cbVoice);
+
+            btnTestAlarm = MakeButton("Тест тревоги", 14, 308);
+            btnTestAlarm.Click += delegate { Sounds.Alarm(threats.Count > 0 ? threats : new List<string>(new string[] { "drones" })); };
+            btnTestClear = MakeButton("Тест отбоя", 148, 308);
+            btnTestClear.Click += delegate { Sounds.Clear(); };
+            btnStop = MakeButton("Стоп звук", 282, 308);
             btnStop.Click += delegate { Sounds.Stop(); };
 
             Label hint = new Label();
             hint.Text = "Крестик сворачивает программу к часам. Выход — правый клик по значку.";
-            hint.Location = new Point(14, 317);
+            hint.Location = new Point(14, 351);
             hint.Size = new Size(392, 36);
             hint.ForeColor = Color.Gray;
             Controls.Add(hint);
@@ -722,6 +868,8 @@ namespace Trevoga
             tray.ContextMenu = menu;
             tray.Visible = true;
             tray.DoubleClick += delegate { ShowWindow(); };
+
+            Sounds.Ui = this;
 
             timer = new System.Windows.Forms.Timer();
             timer.Interval = settings.Interval * 1000;
@@ -924,12 +1072,12 @@ namespace Trevoga
             if (ballisticNew)
             {
                 // Балістика — самое срочное: отдельный сигнал, даже если тревога уже идёт
-                if (settings.Sound) Sounds.PlayBallistic();
+                if (settings.Sound) Sounds.Ballistic(old == AlertState.Clear, threats);
                 tray.ShowBalloonTip(10000, "БАЛІСТИКА!", region + ". Негайно в укриття!", ToolTipIcon.Error);
             }
             else if (old == AlertState.Clear && state == AlertState.Alert)
             {
-                if (settings.Sound) Sounds.Play(true);
+                if (settings.Sound) Sounds.Alarm(threats);
                 tray.ShowBalloonTip(10000, "ПОВІТРЯНА ТРИВОГА!", region + ". Пройдите в укрытие!"
                     + (titles.Count > 0 ? "\n" + lblThreats.Text : ""), ToolTipIcon.Error);
             }
@@ -937,11 +1085,12 @@ namespace Trevoga
             {
                 List<string> addTitles = new List<string>();
                 foreach (string t in added) addTitles.Add(AlertSource.ThreatTitle(t));
+                if (settings.Sound) Sounds.NewThreats(added);
                 tray.ShowBalloonTip(8000, "Нова загроза", region + ": " + string.Join(", ", addTitles.ToArray()), ToolTipIcon.Warning);
             }
             else if (old == AlertState.Alert && state == AlertState.Clear)
             {
-                if (settings.Sound) Sounds.Play(false);
+                if (settings.Sound) Sounds.Clear();
                 tray.ShowBalloonTip(10000, "Відбій тривоги", region, ToolTipIcon.Info);
             }
         }

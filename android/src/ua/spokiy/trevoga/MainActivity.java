@@ -27,6 +27,8 @@ import android.widget.ScrollView;
 import android.widget.Spinner;
 import android.widget.TextView;
 
+import java.util.List;
+
 public class MainActivity extends Activity implements SharedPreferences.OnSharedPreferenceChangeListener {
     private TextView status, info, threatsView;
     private Button toggle;
@@ -135,15 +137,36 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         LinearLayout row = new LinearLayout(this);
         row.setOrientation(LinearLayout.HORIZONTAL);
         row.addView(button("Тест тревоги", new View.OnClickListener() {
-            public void onClick(View v) { Sounds.play(MainActivity.this, true); }
+            public void onClick(View v) {
+                List<String> t = MonitorService.parseList(prefs.getString(Prefs.THREATS, ""));
+                if (t.isEmpty()) t.add("drones");
+                Sounds.alarm(MainActivity.this, t);
+            }
         }), weight());
         row.addView(button("Тест отбоя", new View.OnClickListener() {
-            public void onClick(View v) { Sounds.play(MainActivity.this, false); }
+            public void onClick(View v) { Sounds.clear(MainActivity.this); }
         }), weight());
         row.addView(button("Стоп звук", new View.OnClickListener() {
             public void onClick(View v) { Sounds.stop(); }
         }), weight());
         root.addView(row);
+
+        root.addView(label("Голос перед сиреною:"));
+        final Spinner voice = new Spinner(this);
+        final String[] voiceIds = {"tetiana", "mykyta", "off"};
+        ArrayAdapter<String> va = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item,
+                new String[]{"Жіночий (Тетяна)", "Чоловічий (Микита)", "Без голосу, тільки сирена"});
+        va.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        voice.setAdapter(va);
+        String cv = prefs.getString(Prefs.VOICE, "tetiana");
+        voice.setSelection(cv.equals("mykyta") ? 1 : cv.equals("off") ? 2 : 0);
+        voice.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                prefs.edit().putString(Prefs.VOICE, voiceIds[pos]).apply();
+            }
+            public void onNothingSelected(AdapterView<?> p) { }
+        });
+        root.addView(voice);
 
         root.addView(label("Звуки:"));
         LinearLayout row2 = new LinearLayout(this);
