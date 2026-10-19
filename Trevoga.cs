@@ -133,6 +133,85 @@ namespace Trevoga
         public static readonly int[] OblastUid = {3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
     }
 
+    // ---------------- Мини-парсер JSON (в .NET 4 Client Profile нет своего) ----------------
+    class Json
+    {
+        string s; int i;
+        Json(string text) { s = text; }
+        public static object Parse(string text) { Json j = new Json(text); j.Ws(); return j.Value(); }
+
+        void Ws() { while (i < s.Length && char.IsWhiteSpace(s[i])) i++; }
+
+        object Value()
+        {
+            Ws();
+            if (i >= s.Length) throw new Exception("JSON: конец данных");
+            char c = s[i];
+            if (c == '{')
+            {
+                Dictionary<string, object> d = new Dictionary<string, object>();
+                i++; Ws();
+                if (s[i] == '}') { i++; return d; }
+                while (true)
+                {
+                    Ws(); string k = Str(); Ws();
+                    if (s[i] != ':') throw new Exception("JSON: ожидалось ':'");
+                    i++;
+                    d[k] = Value(); Ws();
+                    if (s[i] == ',') { i++; continue; }
+                    if (s[i] == '}') { i++; return d; }
+                    throw new Exception("JSON: ошибка в объекте");
+                }
+            }
+            if (c == '[')
+            {
+                List<object> l = new List<object>();
+                i++; Ws();
+                if (s[i] == ']') { i++; return l; }
+                while (true)
+                {
+                    l.Add(Value()); Ws();
+                    if (s[i] == ',') { i++; continue; }
+                    if (s[i] == ']') { i++; return l; }
+                    throw new Exception("JSON: ошибка в массиве");
+                }
+            }
+            if (c == '"') return Str();
+            if (s.Substring(i).StartsWith("true")) { i += 4; return true; }
+            if (s.Substring(i).StartsWith("false")) { i += 5; return false; }
+            if (s.Substring(i).StartsWith("null")) { i += 4; return null; }
+            int st = i;
+            while (i < s.Length && "+-0123456789.eE".IndexOf(s[i]) >= 0) i++;
+            if (st == i) throw new Exception("JSON: неизвестный символ");
+            return s.Substring(st, i - st);
+        }
+
+        string Str()
+        {
+            if (s[i] != '"') throw new Exception("JSON: ожидалась строка");
+            i++;
+            StringBuilder sb = new StringBuilder();
+            while (s[i] != '"')
+            {
+                char c = s[i++];
+                if (c != '\\') { sb.Append(c); continue; }
+                char e = s[i++];
+                switch (e)
+                {
+                    case 'n': sb.Append('\n'); break;
+                    case 't': sb.Append('\t'); break;
+                    case 'r': sb.Append('\r'); break;
+                    case 'b': sb.Append('\b'); break;
+                    case 'f': sb.Append('\f'); break;
+                    case 'u': sb.Append((char)Convert.ToInt32(s.Substring(i, 4), 16)); i += 4; break;
+                    default: sb.Append(e); break;
+                }
+            }
+            i++;
+            return sb.ToString();
+        }
+    }
+
     // ---------------- Получение статуса ----------------
     enum AlertState { Unknown, Alert, Clear }
 
@@ -198,6 +277,81 @@ namespace Trevoga
             return CheckUbilling(s.Region);
         }
 
+        // Названия угроз alerts.in.ua
+        public static string ThreatTitle(string t)
+        {
+            switch (t)
+            {
+                case "ballistic_missiles": return "Балістика";
+                case "cruise_missiles": return "Крилаті ракети";
+                case "unspecified_missiles": return "Ракети";
+                case "drones": return "Дрони";
+                case "guided_aerial_bombs": return "КАБи";
+                case "tactic_aircraft_activity": return "Тактична авіація";
+                case "strategic_aircraft_activity": return "Стратегічна авіація";
+                case "mig31k_departure": return "Зліт МіГ-31К";
+                case "air_defense": return "Робота ППО";
+                case "artillery_shelling": return "Артобстріл";
+                case "urban_fights": return "Вуличні бої";
+                case "chemical": return "Хімічна загроза";
+                case "nuclear": return "Радіаційна загроза";
+                default: return "Невідома загроза";
+            }
+        }
+
+        static int ToInt(object o)
+        {
+            int n;
+            return o != null && int.TryParse(Convert.ToString(o, System.Globalization.CultureInfo.InvariantCulture).Split('.')[0], out n) ? n : -1;
+        }
+
+        // Типы угроз по выбранной области/району (только с токеном). Порядок — по важности.
+        public static List<string> GetThreats(Settings s)
+        {
+            int obl = OblastUid(s.Region);
+            string raionName = s.Raion != 0 ? RaionName(s.Raion) : null;
+            string body = Download("https://api.alerts.in.ua/v1/alerts/active.json", s.Token);
+            Dictionary<string, object> root = Json.Parse(body) as Dictionary<string, object>;
+            List<string> found = new List<string>();
+            object arr;
+            if (root == null || !root.TryGetValue("alerts", out arr) || !(arr is List<object>)) return found;
+            foreach (object o in (List<object>)arr)
+            {
+                Dictionary<string, object> a = o as Dictionary<string, object>;
+                if (a == null) continue;
+                object v;
+                int locUid = a.TryGetValue("location_uid", out v) ? ToInt(v) : -1;
+                int locObl = a.TryGetValue("location_oblast_uid", out v) ? ToInt(v) : -1;
+                if (locObl < 0 && a.TryGetValue("location_oblast", out v) && Convert.ToString(v) == s.Region) locObl = obl;
+                if (locObl != obl && locUid != obl) continue;
+                if (s.Raion != 0 && locUid != obl && locUid != s.Raion)
+                {
+                    string r = a.TryGetValue("location_raion", out v) ? Convert.ToString(v) : null;
+                    if (r == null || r != raionName) continue;
+                }
+                string type = a.TryGetValue("alert_type", out v) ? Convert.ToString(v) : "air_raid";
+                if (type != "air_raid" && !found.Contains(type)) found.Add(type);
+                if (a.TryGetValue("threats", out v) && v is List<object>)
+                    foreach (object t in (List<object>)v)
+                    {
+                        Dictionary<string, object> td = t as Dictionary<string, object>;
+                        object tt;
+                        if (td != null && td.TryGetValue("threat_type", out tt) && tt != null && !found.Contains((string)tt))
+                            found.Add((string)tt);
+                    }
+            }
+            string[] order = { "ballistic_missiles", "cruise_missiles", "unspecified_missiles", "mig31k_departure",
+                "guided_aerial_bombs", "drones", "strategic_aircraft_activity", "tactic_aircraft_activity",
+                "air_defense", "artillery_shelling", "urban_fights", "chemical", "nuclear" };
+            found.Sort(delegate(string x, string y)
+            {
+                int ix = Array.IndexOf(order, x), iy = Array.IndexOf(order, y);
+                if (ix < 0) ix = 99; if (iy < 0) iy = 99;
+                return ix.CompareTo(iy);
+            });
+            return found;
+        }
+
         static char CharAt(string str, int uid)
         {
             if (uid < 0 || uid >= str.Length || str[uid] == ' ') throw new Exception("Неожиданный ответ сервера");
@@ -261,6 +415,45 @@ namespace Trevoga
                 if (File.Exists(f)) return f;
             }
             return null;
+        }
+
+        // Срочный сигнал «Балістика»: частые чередующиеся высокие тона (~8 сек)
+        public static void PlayBallistic()
+        {
+            Stop();
+            try
+            {
+                string f = Path.Combine(Application.StartupPath, "ballistic.wav");
+                string m = Path.Combine(Application.StartupPath, "ballistic.mp3");
+                if (File.Exists(m) && mciSendString("open \"" + m + "\" type mpegvideo alias trevoga_snd", null, 0, IntPtr.Zero) == 0)
+                {
+                    mciOpen = true;
+                    mciSendString("play trevoga_snd", null, 0, IntPtr.Zero);
+                    return;
+                }
+                player = File.Exists(f) ? new SoundPlayer(f) : new SoundPlayer(new MemoryStream(Ballistic()));
+                player.Play();
+            }
+            catch { try { SystemSounds.Hand.Play(); } catch { } }
+        }
+
+        static byte[] Ballistic()
+        {
+            const double T = 8, beep = 0.12;
+            int n = (int)(Rate * T);
+            short[] buf = new short[n];
+            for (int i = 0; i < n; i++)
+            {
+                double t = (double)i / Rate;
+                int k = (int)(t / beep);
+                double local = t - k * beep;
+                bool burstGap = (t % 2.0) > 1.6;               // короткая пауза каждые 2 сек
+                double f = (k % 2 == 0) ? 1250 : 1650;
+                double env = burstGap ? 0 : Math.Min(1.0, local / 0.005) * Math.Min(1.0, (beep - local) / 0.01);
+                double v = Math.Sin(2 * Math.PI * f * t) + 0.35 * Math.Sin(6 * Math.PI * f * t);
+                buf[i] = (short)(Math.Tanh(1.5 * v) / Math.Tanh(1.5) * env * 0.85 * 32767);
+            }
+            return ToWav(buf);
         }
 
         public static void Play(bool alarm)
@@ -385,7 +578,9 @@ namespace Trevoga
         Settings settings;
         ComboBox cbRegion, cbRaion;
         bool loading = true;
-        Label lblStatus, lblInfo;
+        Label lblStatus, lblInfo, lblThreats;
+        List<string> threats = new List<string>();
+        DateTime lastThreatFetch = DateTime.MinValue;
         CheckBox chkSound, chkAutorun;
         Button btnTestAlarm, btnTestClear, btnStop;
         NotifyIcon tray;
@@ -406,7 +601,7 @@ namespace Trevoga
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(420, 334);
+            ClientSize = new Size(420, 362);
             Icon = SystemIcons.Shield;
 
             Label l1 = new Label();
@@ -465,15 +660,23 @@ namespace Trevoga
             lblStatus.Text = "Проверка…";
             Controls.Add(lblStatus);
 
+            lblThreats = new Label();
+            lblThreats.Location = new Point(14, 166);
+            lblThreats.Size = new Size(392, 26);
+            lblThreats.TextAlign = ContentAlignment.MiddleCenter;
+            lblThreats.Font = new Font("Segoe UI", 11f, FontStyle.Bold);
+            lblThreats.ForeColor = Color.FromArgb(170, 20, 20);
+            Controls.Add(lblThreats);
+
             lblInfo = new Label();
-            lblInfo.Location = new Point(14, 169);
+            lblInfo.Location = new Point(14, 197);
             lblInfo.Size = new Size(392, 36);
             lblInfo.ForeColor = Color.DimGray;
             Controls.Add(lblInfo);
 
             chkSound = new CheckBox();
             chkSound.Text = "Звук включён";
-            chkSound.Location = new Point(14, 212);
+            chkSound.Location = new Point(14, 240);
             chkSound.AutoSize = true;
             chkSound.Checked = settings.Sound;
             chkSound.CheckedChanged += delegate
@@ -486,22 +689,22 @@ namespace Trevoga
 
             chkAutorun = new CheckBox();
             chkAutorun.Text = "Запускать вместе с Windows";
-            chkAutorun.Location = new Point(185, 212);
+            chkAutorun.Location = new Point(185, 240);
             chkAutorun.AutoSize = true;
             chkAutorun.Checked = IsAutorun();
             chkAutorun.CheckedChanged += delegate { SetAutorun(chkAutorun.Checked); };
             Controls.Add(chkAutorun);
 
-            btnTestAlarm = MakeButton("Тест тревоги", 14, 246);
+            btnTestAlarm = MakeButton("Тест тревоги", 14, 274);
             btnTestAlarm.Click += delegate { Sounds.Play(true); };
-            btnTestClear = MakeButton("Тест отбоя", 148, 246);
+            btnTestClear = MakeButton("Тест отбоя", 148, 274);
             btnTestClear.Click += delegate { Sounds.Play(false); };
-            btnStop = MakeButton("Стоп звук", 282, 246);
+            btnStop = MakeButton("Стоп звук", 282, 274);
             btnStop.Click += delegate { Sounds.Stop(); };
 
             Label hint = new Label();
             hint.Text = "Крестик сворачивает программу к часам. Выход — правый клик по значку.";
-            hint.Location = new Point(14, 289);
+            hint.Location = new Point(14, 317);
             hint.Size = new Size(392, 36);
             hint.ForeColor = Color.Gray;
             Controls.Add(hint);
@@ -561,6 +764,8 @@ namespace Trevoga
             settings.Save();
             state = AlertState.Unknown;
             firstCheck = true;
+            threats = new List<string>();
+            lastThreatFetch = DateTime.MinValue;
             requestId++;          // ответ на старый запрос (другая область) не применяем
             checking = false;
             CheckNow();
@@ -634,25 +839,33 @@ namespace Trevoga
             checking = true;
             int myId = ++requestId;
             Settings snapshot = settings;
+            bool wasAlert = state == AlertState.Alert;
+            bool threatsDue = (DateTime.Now - lastThreatFetch).TotalSeconds >= 55;
             ThreadPool.QueueUserWorkItem(delegate
             {
                 AlertState result = AlertState.Unknown;
                 string error = null, source = "";
+                List<string> newThreats = null;
                 try { result = AlertSource.Check(snapshot, out source); }
                 catch (Exception ex) { error = ex.Message; }
+                // Типы угроз — только с токеном, только во время тревоги, не чаще раза в минуту (лимиты API)
+                if (error == null && result == AlertState.Alert && !string.IsNullOrEmpty(snapshot.Token) && (!wasAlert || threatsDue))
+                {
+                    try { newThreats = AlertSource.GetThreats(snapshot); } catch { }
+                }
                 try
                 {
                     BeginInvoke((MethodInvoker)delegate
                     {
                         checking = false;
-                        if (myId == requestId) ApplyResult(result, error, source);
+                        if (myId == requestId) ApplyResult(result, error, source, newThreats);
                     });
                 }
                 catch { checking = false; }
             });
         }
 
-        void ApplyResult(AlertState result, string error, string source)
+        void ApplyResult(AlertState result, string error, string source, List<string> newThreats)
         {
             string time = DateTime.Now.ToString("HH:mm:ss");
             if (error != null)
@@ -670,6 +883,20 @@ namespace Trevoga
             AlertState old = state;
             state = result;
             string region = PlaceName();
+
+            // Угрозы
+            List<string> added = new List<string>();
+            if (state != AlertState.Alert) threats = new List<string>();
+            else if (newThreats != null)
+            {
+                foreach (string t in newThreats) if (!threats.Contains(t)) added.Add(t);
+                threats = newThreats;
+                lastThreatFetch = DateTime.Now;
+            }
+            List<string> titles = new List<string>();
+            foreach (string t in threats) titles.Add(AlertSource.ThreatTitle(t));
+            lblThreats.Text = titles.Count > 0 ? string.Join(" · ", titles.ToArray()) : "";
+            bool ballisticNew = added.Contains("ballistic_missiles");
             if (state == AlertState.Alert)
             {
                 lblStatus.BackColor = Color.FromArgb(200, 30, 30);
@@ -689,14 +916,28 @@ namespace Trevoga
             {
                 firstCheck = false;
                 if (state == AlertState.Alert)
-                    tray.ShowBalloonTip(5000, "Повітряна тривога", "Сейчас действует тревога: " + region, ToolTipIcon.Warning);
+                    tray.ShowBalloonTip(5000, "Повітряна тривога", "Сейчас действует тревога: " + region
+                        + (titles.Count > 0 ? "\n" + lblThreats.Text : ""), ToolTipIcon.Warning);
                 return;
             }
 
-            if (old == AlertState.Clear && state == AlertState.Alert)
+            if (ballisticNew)
+            {
+                // Балістика — самое срочное: отдельный сигнал, даже если тревога уже идёт
+                if (settings.Sound) Sounds.PlayBallistic();
+                tray.ShowBalloonTip(10000, "БАЛІСТИКА!", region + ". Негайно в укриття!", ToolTipIcon.Error);
+            }
+            else if (old == AlertState.Clear && state == AlertState.Alert)
             {
                 if (settings.Sound) Sounds.Play(true);
-                tray.ShowBalloonTip(10000, "ПОВІТРЯНА ТРИВОГА!", region + ". Пройдите в укрытие!", ToolTipIcon.Error);
+                tray.ShowBalloonTip(10000, "ПОВІТРЯНА ТРИВОГА!", region + ". Пройдите в укрытие!"
+                    + (titles.Count > 0 ? "\n" + lblThreats.Text : ""), ToolTipIcon.Error);
+            }
+            else if (state == AlertState.Alert && added.Count > 0 && old == AlertState.Alert)
+            {
+                List<string> addTitles = new List<string>();
+                foreach (string t in added) addTitles.Add(AlertSource.ThreatTitle(t));
+                tray.ShowBalloonTip(8000, "Нова загроза", region + ": " + string.Join(", ", addTitles.ToArray()), ToolTipIcon.Warning);
             }
             else if (old == AlertState.Alert && state == AlertState.Clear)
             {

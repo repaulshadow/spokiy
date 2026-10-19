@@ -8,6 +8,7 @@ import android.os.Build;
 
 final class Prefs {
     static final String NAME = "trevoga";
+    static final String THREATS = "threats";
     static final String RAION = "raion", SOUND_ALARM = "sound_alarm", SOUND_CLEAR = "sound_clear";
     static final String REGION = "region", TOKEN = "token", PARTIAL = "partial", ENABLED = "enabled",
             STATE = "state", STATUS_TIME = "status_time", ERROR = "error", SOURCE = "source",

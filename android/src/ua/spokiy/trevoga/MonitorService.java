@@ -13,7 +13,10 @@ import android.os.IBinder;
 import android.os.PowerManager;
 
 import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Date;
+import java.util.List;
 import java.util.Locale;
 
 /** Фоновый сервис: раз в 20 секунд проверяет тревогу и играет звук при смене статуса. */
@@ -28,6 +31,7 @@ public class MonitorService extends Service {
     private PowerManager.WakeLock wakeLock;
     private String lastPlace = null;
     private boolean firstCheck = true;
+    private long lastThreatFetch = 0;
 
     static void start(Context c) {
         c.startService(new Intent(c, MonitorService.class));
@@ -84,6 +88,8 @@ public class MonitorService extends Service {
         if (!place.equals(lastPlace)) {
             lastPlace = place;
             firstCheck = true;
+            lastThreatFetch = 0;
+            p.edit().remove(Prefs.THREATS).apply();
         }
         String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
 
@@ -96,28 +102,62 @@ public class MonitorService extends Service {
             return;
         }
 
+        // Типы угроз — только с токеном, во время тревоги, не чаще раза в минуту (лимиты API)
+        int prevState = firstCheck ? AlertSource.UNKNOWN : p.getInt(Prefs.STATE, AlertSource.UNKNOWN);
+        List<String> oldThreats = parseList(p.getString(Prefs.THREATS, ""));
+        List<String> threats = oldThreats;
+        List<String> added = new ArrayList<String>();
+        if (result != AlertSource.ALERT) threats = new ArrayList<String>();
+        else if (token.trim().length() > 0
+                && (prevState != AlertSource.ALERT || System.currentTimeMillis() - lastThreatFetch > 55000)) {
+            try {
+                threats = AlertSource.getThreats(region, raion, token);
+                lastThreatFetch = System.currentTimeMillis();
+                for (String t : threats) if (!oldThreats.contains(t)) added.add(t);
+            } catch (Exception ignored) { }
+        }
+
         if (!place.equals(Prefs.region(this) + "|" + Prefs.raion(this))) return; // место сменили во время запроса
         region = Prefs.place(this);
         int old = firstCheck ? AlertSource.UNKNOWN : p.getInt(Prefs.STATE, AlertSource.UNKNOWN);
-        p.edit().putInt(Prefs.STATE, result).putString(Prefs.STATUS_TIME, time)
+        p.edit().putInt(Prefs.STATE, result).putString(Prefs.STATUS_TIME, time).putString(Prefs.THREATS, join(threats))
                 .putString(Prefs.SOURCE, AlertSource.lastSource).remove(Prefs.ERROR).apply();
         updateStatus(result, region, false);
+        String th = AlertSource.titles(threats);
 
         if (firstCheck) {
             firstCheck = false;
             return; // при запуске звук не играем, только показываем статус
         }
-        if (old == AlertSource.CLEAR && result == AlertSource.ALERT) {
+        if (added.contains("ballistic_missiles")) {
+            Sounds.playBallistic(this);                    // балістика — отдельный срочный сигнал
+            alertNotification("БАЛІСТИКА!", region + ". Негайно в укриття!");
+        } else if (old == AlertSource.CLEAR && result == AlertSource.ALERT) {
             Sounds.play(this, true);
-            alertNotification("ПОВІТРЯНА ТРИВОГА!", region + ". Пройдіть в укриття!");
+            alertNotification("ПОВІТРЯНА ТРИВОГА!", region + ". Пройдіть в укриття!" + (th.length() > 0 ? "\n" + th : ""));
+        } else if (old == AlertSource.ALERT && result == AlertSource.ALERT && !added.isEmpty()) {
+            alertNotification("Нова загроза", region + ": " + AlertSource.titles(added));
         } else if (old == AlertSource.ALERT && result == AlertSource.CLEAR) {
             Sounds.play(this, false);
             alertNotification("Відбій тривоги", region);
         }
     }
 
+    static List<String> parseList(String s) {
+        List<String> l = new ArrayList<String>();
+        if (s != null && s.length() > 0) l.addAll(Arrays.asList(s.split(",")));
+        return l;
+    }
+
+    static String join(List<String> l) {
+        StringBuilder sb = new StringBuilder();
+        for (String x : l) { if (sb.length() > 0) sb.append(','); sb.append(x); }
+        return sb.toString();
+    }
+
     private void updateStatus(int state, String region, boolean error) {
-        String text = state == AlertSource.ALERT ? "ТРИВОГА — " + region
+        String th = AlertSource.titles(parseList(Prefs.get(this).getString(Prefs.THREATS, "")));
+        String text = state == AlertSource.ALERT ? "ТРИВОГА — " + region + (th.length() > 0 ? " · " + th : "")
                 : state == AlertSource.CLEAR ? "Тривоги немає — " + region
                 : "Немає даних — " + region;
         if (error) text += " (немає зв'язку)";
@@ -150,6 +190,7 @@ public class MonitorService extends Service {
                 .setSmallIcon(R.drawable.ic_launcher)
                 .setContentTitle(title)
                 .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setPriority(Notification.PRIORITY_MAX)
                 .setCategory(Notification.CATEGORY_ALARM)
                 .setAutoCancel(true)

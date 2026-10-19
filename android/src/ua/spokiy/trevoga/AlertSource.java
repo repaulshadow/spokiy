@@ -4,6 +4,14 @@ import java.io.BufferedReader;
 import java.io.InputStreamReader;
 import java.net.HttpURLConnection;
 import java.net.URL;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
+import java.util.Comparator;
+import java.util.List;
+
+import org.json.JSONArray;
+import org.json.JSONObject;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 
@@ -64,6 +72,78 @@ final class AlertSource {
         }
         m.appendTail(sb);
         return sb.toString();
+    }
+
+    static String threatTitle(String t) {
+        if (t.equals("ballistic_missiles")) return "Балістика";
+        if (t.equals("cruise_missiles")) return "Крилаті ракети";
+        if (t.equals("unspecified_missiles")) return "Ракети";
+        if (t.equals("drones")) return "Дрони";
+        if (t.equals("guided_aerial_bombs")) return "КАБи";
+        if (t.equals("tactic_aircraft_activity")) return "Тактична авіація";
+        if (t.equals("strategic_aircraft_activity")) return "Стратегічна авіація";
+        if (t.equals("mig31k_departure")) return "Зліт МіГ-31К";
+        if (t.equals("air_defense")) return "Робота ППО";
+        if (t.equals("artillery_shelling")) return "Артобстріл";
+        if (t.equals("urban_fights")) return "Вуличні бої";
+        if (t.equals("chemical")) return "Хімічна загроза";
+        if (t.equals("nuclear")) return "Радіаційна загроза";
+        return "Невідома загроза";
+    }
+
+    static String titles(List<String> types) {
+        StringBuilder sb = new StringBuilder();
+        for (String t : types) { if (sb.length() > 0) sb.append(" · "); sb.append(threatTitle(t)); }
+        return sb.toString();
+    }
+
+    private static int toInt(Object o) {
+        if (o == null || o == JSONObject.NULL) return -1;
+        try { return (int) Double.parseDouble(String.valueOf(o)); } catch (Exception e) { return -1; }
+    }
+
+    private static final List<String> ORDER = Arrays.asList("ballistic_missiles", "cruise_missiles",
+            "unspecified_missiles", "mig31k_departure", "guided_aerial_bombs", "drones",
+            "strategic_aircraft_activity", "tactic_aircraft_activity", "air_defense",
+            "artillery_shelling", "urban_fights", "chemical", "nuclear");
+
+    /** Типы угроз по выбранной области/району (только с токеном), по важности. */
+    static List<String> getThreats(String region, int raion, String token) throws Exception {
+        int obl = Locations.oblastUid(region);
+        String raionName = raion != 0 ? raionName(raion) : null;
+        JSONObject root = new JSONObject(download("https://api.alerts.in.ua/v1/alerts/active.json", token.trim()));
+        JSONArray arr = root.optJSONArray("alerts");
+        final List<String> found = new ArrayList<String>();
+        if (arr == null) return found;
+        for (int i = 0; i < arr.length(); i++) {
+            JSONObject a = arr.optJSONObject(i);
+            if (a == null) continue;
+            int locUid = toInt(a.opt("location_uid"));
+            int locObl = toInt(a.opt("location_oblast_uid"));
+            if (locObl < 0 && region.equals(a.optString("location_oblast"))) locObl = obl;
+            if (locObl != obl && locUid != obl) continue;
+            if (raion != 0 && locUid != obl && locUid != raion) {
+                String r = a.optString("location_raion", null);
+                if (r == null || !r.equals(raionName)) continue;
+            }
+            String type = a.optString("alert_type", "air_raid");
+            if (!type.equals("air_raid") && !found.contains(type)) found.add(type);
+            JSONArray th = a.optJSONArray("threats");
+            if (th != null) for (int j = 0; j < th.length(); j++) {
+                JSONObject t = th.optJSONObject(j);
+                String tt = t != null ? t.optString("threat_type", null) : null;
+                if (tt != null && !found.contains(tt)) found.add(tt);
+            }
+        }
+        Collections.sort(found, new Comparator<String>() {
+            public int compare(String x, String y) {
+                int ix = ORDER.indexOf(x), iy = ORDER.indexOf(y);
+                if (ix < 0) ix = 99;
+                if (iy < 0) iy = 99;
+                return ix - iy;
+            }
+        });
+        return found;
     }
 
     static String raionName(int uid) {

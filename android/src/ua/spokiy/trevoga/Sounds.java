@@ -61,6 +61,46 @@ final class Sounds {
         } catch (Exception ignored) { }
     }
 
+    /** Срочный сигнал «Балістика»: частые чередующиеся высокие тона (~8 сек). */
+    static synchronized void playBallistic(Context ctx) {
+        stop();
+        try {
+            File f = new File(ctx.getFilesDir(), "ballistic_v1.wav");
+            if (!f.exists()) writeWav(f, ballistic());
+            MediaPlayer mp = new MediaPlayer();
+            mp.setAudioStreamType(AudioManager.STREAM_ALARM);
+            mp.setDataSource(f.getAbsolutePath());
+            mp.prepare();
+            mp.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
+                public void onCompletion(MediaPlayer m) { stop(); }
+            });
+            mp.start();
+            player = mp;
+        } catch (Exception ignored) { }
+        try {
+            Vibrator v = (Vibrator) ctx.getSystemService(Context.VIBRATOR_SERVICE);
+            if (v != null) v.vibrate(new long[]{0, 150, 100, 150, 100, 150, 100, 150, 100, 150, 100, 150, 400, 1000}, -1);
+        } catch (Exception ignored) { }
+    }
+
+    private static short[] ballistic() {
+        final double T = 8, beep = 0.12;
+        int n = (int) (RATE * T);
+        short[] buf = new short[n];
+        double sat = tanh(1.5);
+        for (int i = 0; i < n; i++) {
+            double t = (double) i / RATE;
+            int k = (int) (t / beep);
+            double local = t - k * beep;
+            boolean gap = (t % 2.0) > 1.6;
+            double f = (k % 2 == 0) ? 1250 : 1650;
+            double env = gap ? 0 : Math.min(1.0, local / 0.005) * Math.min(1.0, (beep - local) / 0.01);
+            double v = Math.sin(2 * Math.PI * f * t) + 0.35 * Math.sin(6 * Math.PI * f * t);
+            buf[i] = (short) (tanh(1.5 * v) / sat * env * 0.85 * 32767);
+        }
+        return buf;
+    }
+
     private static void writeWav(File f, short[] s) throws Exception {
         DataOutputStream o = new DataOutputStream(new BufferedOutputStream(new FileOutputStream(f)));
         int dataLen = s.length * 2;

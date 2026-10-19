@@ -28,7 +28,7 @@ import android.widget.Spinner;
 import android.widget.TextView;
 
 public class MainActivity extends Activity implements SharedPreferences.OnSharedPreferenceChangeListener {
-    private TextView status, info;
+    private TextView status, info, threatsView;
     private Button toggle;
     private SharedPreferences prefs;
     private Spinner raionSpinner;
@@ -103,6 +103,14 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
                 ViewGroup.LayoutParams.WRAP_CONTENT);
         sp.topMargin = dp(16);
         root.addView(status, sp);
+
+        threatsView = new TextView(this);
+        threatsView.setTextSize(18);
+        threatsView.setTypeface(Typeface.DEFAULT_BOLD);
+        threatsView.setTextColor(Color.rgb(170, 20, 20));
+        threatsView.setGravity(Gravity.CENTER);
+        threatsView.setPadding(0, dp(8), 0, 0);
+        root.addView(threatsView);
 
         info = new TextView(this);
         info.setTextColor(Color.GRAY);
@@ -303,6 +311,9 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             status.setText("Проверка…");
             status.setBackgroundColor(Color.rgb(120, 120, 120));
         }
+        String th = AlertSource.titles(MonitorService.parseList(prefs.getString(Prefs.THREATS, "")));
+        threatsView.setText(on && state == AlertSource.ALERT ? th : "");
+        threatsView.setVisibility(threatsView.getText().length() > 0 ? View.VISIBLE : View.GONE);
         String err = prefs.getString(Prefs.ERROR, null);
         String t = prefs.getString(Prefs.STATUS_TIME, null);
         if (!on) info.setText("");
