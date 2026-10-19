@@ -3,6 +3,7 @@ package ua.spokiy.trevoga;
 import android.content.Context;
 import android.media.AudioManager;
 import android.media.MediaPlayer;
+import android.net.Uri;
 import android.os.Vibrator;
 
 import java.io.DataOutputStream;
@@ -25,12 +26,26 @@ final class Sounds {
     static synchronized void play(Context ctx, boolean alarm) {
         stop();
         try {
-            File f = new File(ctx.getFilesDir(), alarm ? "siren_v1.wav" : "clear_v1.wav");
-            if (!f.exists()) writeWav(f, alarm ? siren() : allClear());
             MediaPlayer mp = new MediaPlayer();
             mp.setAudioStreamType(AudioManager.STREAM_ALARM); // слышно даже в беззвучном режиме
-            mp.setDataSource(f.getAbsolutePath());
-            mp.prepare();
+            String custom = Prefs.get(ctx).getString(alarm ? Prefs.SOUND_ALARM : Prefs.SOUND_CLEAR, null);
+            boolean ok = false;
+            if (custom != null) {
+                try {
+                    mp.setDataSource(ctx, Uri.parse(custom));   // свой звук, выбранный пользователем
+                    mp.prepare();
+                    ok = true;
+                } catch (Exception e) {
+                    mp.reset();
+                    mp.setAudioStreamType(AudioManager.STREAM_ALARM);
+                }
+            }
+            if (!ok) {
+                File f = new File(ctx.getFilesDir(), alarm ? "siren_v2.wav" : "clear_v1.wav");
+                if (!f.exists()) writeWav(f, alarm ? siren() : allClear());
+                mp.setDataSource(f.getAbsolutePath());
+                mp.prepare();
+            }
             mp.setOnCompletionListener(new MediaPlayer.OnCompletionListener() {
                 public void onCompletion(MediaPlayer m) { stop(); }
             });
@@ -65,22 +80,37 @@ final class Sounds {
         o.write(v & 0xff); o.write((v >> 8) & 0xff);
     }
 
-    // Сирена: тон плавно поднимается и опускается, 4 цикла (~16 сек)
+    // Сирена гражданской обороны: раскрутка мотора, протяжный вой вверх-вниз, затухание (~24 сек)
+    private static double sirenFreq(double t) {
+        final double T = 24, up = 3, down = 3.5, lo = 150, top = 620;
+        if (t < up) return lo + (top - lo) * (1 - Math.exp(-3 * t / up)) / (1 - Math.exp(-3));
+        double wail = 500 + 120 * Math.cos(2 * Math.PI * (Math.min(t, T - down) - up) / 5.0);
+        if (t <= T - down) return wail;
+        double k = (t - (T - down)) / down;
+        return lo + (wail - lo) * Math.pow(1 - Math.min(1, k), 1.5);
+    }
+
+    private static double tanh(double x) { double e = Math.exp(2 * x); return (e - 1) / (e + 1); }
+
     private static short[] siren() {
-        double cycle = 4.0;
-        int n = (int) (RATE * cycle * 4);
+        final double T = 24;
+        int n = (int) (RATE * T);
         short[] buf = new short[n];
-        double phase = 0;
+        double[] harm = {1.0, 0.5, 0.35, 0.22, 0.14, 0.08};
+        double norm = 0;
+        for (double h : harm) norm += h;
+        java.util.Random rnd = new java.util.Random(7);
+        double phase = 0, sat = tanh(1.8);
         for (int i = 0; i < n; i++) {
             double t = (double) i / RATE;
-            double pos = (t % cycle) / cycle;
-            double k = pos < 0.5 ? pos * 2 : (1 - pos) * 2;
-            k = 0.5 - 0.5 * Math.cos(Math.PI * k);
-            double f = 450 + 650 * k;
+            double f = sirenFreq(t) * (1 + 0.004 * Math.sin(2 * Math.PI * 5.5 * t));
             phase += 2 * Math.PI * f / RATE;
-            double v = 0.62 * Math.sin(phase) + 0.25 * Math.sin(2 * phase) + 0.12 * Math.sin(3 * phase);
-            double env = Math.min(1.0, t / 0.3) * Math.min(1.0, (n - i) / (RATE * 0.5));
-            buf[i] = (short) (v * env * 0.8 * 32767);
+            double v = 0;
+            for (int h = 0; h < harm.length; h++) v += harm[h] * Math.sin((h + 1) * phase);
+            v = v / norm + 0.03 * (rnd.nextDouble() * 2 - 1);
+            v = tanh(1.8 * v) / sat;
+            double env = Math.min(1.0, f / 400.0) * Math.min(1.0, t / 0.2) * Math.min(1.0, (n - i) / (RATE * 0.4));
+            buf[i] = (short) (v * env * 0.85 * 32767);
         }
         return buf;
     }

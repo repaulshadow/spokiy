@@ -7,6 +7,7 @@ using System.Collections.Generic;
 using System.Drawing;
 using System.IO;
 using System.Media;
+using System.Runtime.InteropServices;
 using System.Net;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -58,6 +59,7 @@ namespace Trevoga
     class Settings
     {
         public string Region = "м. Київ";
+        public int Raion = 0;              // uid района alerts.in.ua, 0 = вся область
         public string Token = "";          // токен alerts.in.ua (необязательно)
         public int Interval = 15;          // секунд между проверками
         public bool Partial = false;       // считать частичную тревогу (только alerts.in.ua)
@@ -84,6 +86,7 @@ namespace Trevoga
                     string v = line.Substring(eq + 1).Trim();
                     int n;
                     if (k == "region" && v.Length > 0) s.Region = v;
+                    else if (k == "raion" && int.TryParse(v, out n)) s.Raion = n;
                     else if (k == "token") s.Token = v;
                     else if (k == "interval" && int.TryParse(v, out n)) s.Interval = n;
                     else if (k == "partial") s.Partial = (v == "1" || v.ToLower() == "true");
@@ -102,11 +105,13 @@ namespace Trevoga
                 StringBuilder sb = new StringBuilder();
                 sb.AppendLine("; Настройки программы Тревога");
                 sb.AppendLine("; region   - область (как в списке программы)");
+                sb.AppendLine("; raion    - код района (0 = вся область). Районы работают только с токеном");
                 sb.AppendLine("; token    - токен alerts.in.ua (можно оставить пустым)");
                 sb.AppendLine("; interval - как часто проверять, секунд (минимум 10)");
-                sb.AppendLine("; partial  - 1 = считать тревогой и частичную (в отдельных районах), только с токеном");
+                sb.AppendLine("; partial  - 1 = считать тревогой и частичную (в части района/области), только с токеном");
                 sb.AppendLine("; sound    - 1 = звук включён, 0 = выключен");
                 sb.AppendLine("region=" + Region);
+                sb.AppendLine("raion=" + Raion);
                 sb.AppendLine("token=" + Token);
                 sb.AppendLine("interval=" + Interval);
                 sb.AppendLine("partial=" + (Partial ? "1" : "0"));
@@ -115,6 +120,17 @@ namespace Trevoga
             }
             catch { }
         }
+    }
+
+    // ---------------- Области и районы ----------------
+    static class Locations
+    {
+        // uid, название, uid области (из alerts.in.ua). Район uid → индекс в строке /v1/iot/active_air_raid_alerts.json
+        public static readonly int[] RaionUid = {38, 41, 40, 39, 36, 37, 35, 33, 32, 34, 44, 42, 46, 47, 45, 43, 48, 54, 55, 51, 53, 49, 50, 52, 56, 57, 59, 60, 58, 61, 65, 63, 64, 66, 62, 147, 146, 149, 148, 145, 78, 79, 75, 73, 74, 76, 77, 82, 81, 83, 80, 1803, 1804, 1801, 1802, 85, 86, 84, 87, 91, 94, 90, 88, 89, 92, 93, 96, 95, 98, 97, 100, 105, 102, 104, 99, 103, 101, 107, 106, 108, 109, 110, 111, 112, 113, 117, 118, 116, 114, 115, 120, 119, 121, 127, 126, 123, 128, 124, 122, 125, 129, 133, 131, 130, 132, 135, 134, 136, 150, 153, 151, 152, 138, 139, 137, 144, 141, 142, 143, 140, 67, 71, 70, 69, 72, 68};
+        public static readonly int[] RaionOblast = {8, 8, 8, 8, 4, 4, 4, 4, 4, 4, 9, 9, 9, 9, 9, 9, 9, 28, 28, 28, 28, 28, 28, 28, 28, 10, 10, 10, 10, 11, 11, 11, 11, 11, 11, 12, 12, 12, 12, 12, 14, 14, 14, 14, 14, 14, 14, 15, 15, 15, 15, 16, 16, 16, 16, 16, 16, 16, 16, 27, 27, 27, 27, 27, 27, 27, 17, 17, 17, 17, 18, 18, 18, 18, 18, 18, 18, 19, 19, 19, 19, 5, 5, 5, 5, 20, 20, 20, 20, 20, 21, 21, 21, 22, 22, 22, 22, 22, 22, 22, 23, 23, 23, 23, 23, 3, 3, 3, 24, 24, 24, 24, 26, 26, 26, 25, 25, 25, 25, 25, 13, 13, 13, 13, 13, 13};
+        public static readonly string[] RaionName = {"Володимирський район", "Камінь-Каширський район", "Ковельський район", "Луцький район", "Вінницький район", "Гайсинський район", "Жмеринський район", "Могилів-Подільський район", "Тульчинський район", "Хмільницький район", "Дніпровський район", "Кам'янський район", "Криворізький район", "Нікопольський район", "Павлоградський район", "Самарівський район", "Синельниківський район", "Бахмутський район", "Волноваський район", "Горлівський район", "Донецький район", "Кальміуський район", "Краматорський район", "Маріупольський район", "Покровський район", "Бердичівський район", "Житомирський район", "Звягельський район", "Коростенський район", "Берегівський район", "Мукачівський район", "Рахівський район", "Тячівський район", "Ужгородський район", "Хустський район", "Бердянський район", "Василівський район", "Запорізький район", "Мелітопольський район", "Пологівський район", "Бориспільський район", "Броварський район", "Бучанський район", "Білоцерківський район", "Вишгородський район", "Обухівський район", "Фастівський район", "Голованівський район", "Кропивницький район", "Новоукраїнський район", "Олександрійський район", "Алчевський район", "Довжанський район", "Луганський район", "Ровеньківський район", "Сватівський район", "Старобільський район", "Сіверськодонецький район", "Щастинський район", "Дрогобицький район", "Золочівський район", "Львівський район", "Самбірський район", "Стрийський район", "Шептицький район", "Яворівський район", "Баштанський район", "Вознесенський район", "Миколаївський район", "Первомайський район", "Березівський район", "Болградський район", "Білгород-Дністровський район", "Одеський район", "Подільський район", "Роздільнянський район", "Ізмаїльський район", "Кременчуцький район", "Лубенський район", "Миргородський район", "Полтавський район", "Вараський район", "Дубенський район", "Рівненський район", "Сарненський район", "Конотопський район", "Охтирський район", "Роменський район", "Сумський район", "Шосткинський район", "Кременецький район", "Тернопільський район", "Чортківський район", "Берестинський район", "Богодухівський район", "Куп'янський район", "Лозівський район", "Харківський район", "Чугуївський район", "Ізюмський район", "Бериславський район", "Генічеський район", "Каховський район", "Скадовський район", "Херсонський район", "Кам'янець-Подільський район", "Хмельницький район", "Шепетівський район", "Звенигородський район", "Золотоніський район", "Уманський район", "Черкаський район", "Вижницький район", "Дністровський район", "Чернівецький район", "Корюківський район", "Новгород-Сіверський район", "Ніжинський район", "Прилуцький район", "Чернігівський район", "Верховинський район", "Калуський район", "Коломийський район", "Косівський район", "Надвірнянський район", "Івано-Франківський район"};
+        public static readonly string[] OblastName = {"Хмельницька область", "Вінницька область", "Рівненська область", "Волинська область", "Дніпропетровська область", "Житомирська область", "Закарпатська область", "Запорізька область", "Івано-Франківська область", "Київська область", "Кіровоградська область", "Луганська область", "Миколаївська область", "Одеська область", "Полтавська область", "Сумська область", "Тернопільська область", "Харківська область", "Херсонська область", "Черкаська область", "Чернігівська область", "Чернівецька область", "Львівська область", "Донецька область", "Автономна Республіка Крим", "м. Севастополь", "м. Київ"};
+        public static readonly int[] OblastUid = {3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31};
     }
 
     // ---------------- Получение статуса ----------------
@@ -157,6 +173,18 @@ namespace Trevoga
             });
         }
 
+        public static int OblastUid(string name)
+        {
+            int i = Array.IndexOf(Locations.OblastName, name);
+            return i >= 0 ? Locations.OblastUid[i] : -1;
+        }
+
+        public static string RaionName(int uid)
+        {
+            int i = Array.IndexOf(Locations.RaionUid, uid);
+            return i >= 0 ? Locations.RaionName[i] : null;
+        }
+
         // Возвращает состояние; source — откуда взяли, для отображения.
         public static AlertState Check(Settings s, out string source)
         {
@@ -165,18 +193,28 @@ namespace Trevoga
                 source = "alerts.in.ua";
                 return CheckAlertsInUa(s);
             }
-            source = "ubilling.net.ua";
+            source = s.Raion != 0 ? "ubilling.net.ua · район без токена недоступен, следим за всей областью"
+                                  : "ubilling.net.ua";
             return CheckUbilling(s.Region);
         }
 
+        static char CharAt(string str, int uid)
+        {
+            if (uid < 0 || uid >= str.Length || str[uid] == ' ') throw new Exception("Неожиданный ответ сервера");
+            return char.ToUpperInvariant(str[uid]);
+        }
+
+        // Строка, где символ с индексом uid — статус области/района: A — тревога, P — частичная, N — нет
         static AlertState CheckAlertsInUa(Settings s)
         {
-            int idx = Array.IndexOf(Regions, s.Region);
-            if (idx < 0) throw new Exception("Неизвестная область: " + s.Region);
-            string body = Download("https://api.alerts.in.ua/v1/iot/active_air_raid_alerts_by_oblast.json", s.Token);
-            string str = body.Trim().Trim('"');
-            if (str.Length <= idx) throw new Exception("Неожиданный ответ сервера");
-            char c = char.ToUpperInvariant(str[idx]);
+            int obl = OblastUid(s.Region);
+            if (obl < 0) throw new Exception("Неизвестная область: " + s.Region);
+            string body = Download("https://api.alerts.in.ua/v1/iot/active_air_raid_alerts.json", s.Token).Trim();
+            if (body.StartsWith("\"")) body = body.Substring(1);
+            if (body.EndsWith("\"")) body = body.Substring(0, body.Length - 1);
+            char o = CharAt(body, obl);
+            if (o == 'A') return AlertState.Alert;               // тревога по всей области
+            char c = s.Raion != 0 ? CharAt(body, s.Raion) : o;
             if (c == 'A') return AlertState.Alert;
             if (c == 'P') return s.Partial ? AlertState.Alert : AlertState.Clear;
             if (c == 'N') return AlertState.Clear;
@@ -202,10 +240,27 @@ namespace Trevoga
     static class Sounds
     {
         static SoundPlayer player;
+        static bool mciOpen;
+
+        [DllImport("winmm.dll", CharSet = CharSet.Unicode)]
+        static extern int mciSendString(string command, StringBuilder ret, int retLen, IntPtr callback);
 
         public static void Stop()
         {
             try { if (player != null) player.Stop(); } catch { }
+            try { if (mciOpen) { mciSendString("close trevoga_snd", null, 0, IntPtr.Zero); mciOpen = false; } } catch { }
+        }
+
+        // Свой звук: alarm.wav / alarm.mp3 и clear.wav / clear.mp3 рядом с программой
+        static string CustomFile(bool alarm)
+        {
+            string name = alarm ? "alarm" : "clear";
+            foreach (string ext in new string[] { ".wav", ".mp3" })
+            {
+                string f = Path.Combine(Application.StartupPath, name + ext);
+                if (File.Exists(f)) return f;
+            }
+            return null;
         }
 
         public static void Play(bool alarm)
@@ -213,8 +268,18 @@ namespace Trevoga
             Stop();
             try
             {
-                string custom = Path.Combine(Application.StartupPath, alarm ? "alarm.wav" : "clear.wav");
-                if (File.Exists(custom))
+                string custom = CustomFile(alarm);
+                if (custom != null && custom.EndsWith(".mp3", StringComparison.OrdinalIgnoreCase))
+                {
+                    if (mciSendString("open \"" + custom + "\" type mpegvideo alias trevoga_snd", null, 0, IntPtr.Zero) == 0)
+                    {
+                        mciOpen = true;
+                        mciSendString("play trevoga_snd", null, 0, IntPtr.Zero);
+                        return;
+                    }
+                    custom = null;
+                }
+                if (custom != null)
                     player = new SoundPlayer(custom);
                 else
                     player = new SoundPlayer(new MemoryStream(alarm ? Siren() : AllClear()));
@@ -244,30 +309,42 @@ namespace Trevoga
             return ms.ToArray();
         }
 
-        // Сирена: тон плавно поднимается и опускается, 4 цикла (~16 сек)
+        // Сирена гражданской обороны: раскрутка мотора, протяжный вой вверх-вниз, затухание (~24 сек)
+        static double SirenFreq(double t)
+        {
+            const double T = 24, up = 3, down = 3.5, lo = 150, top = 620;
+            if (t < up) return lo + (top - lo) * (1 - Math.Exp(-3 * t / up)) / (1 - Math.Exp(-3));
+            double wail = 500 + 120 * Math.Cos(2 * Math.PI * (Math.Min(t, T - down) - up) / 5.0);
+            if (t <= T - down) return wail;
+            double k = (t - (T - down)) / down;
+            return lo + (wail - lo) * Math.Pow(1 - Math.Min(1, k), 1.5);
+        }
+
         static byte[] Siren()
         {
-            double cycle = 4.0;
-            int cycles = 4;
-            int n = (int)(Rate * cycle * cycles);
+            const double T = 24;
+            int n = (int)(Rate * T);
             short[] buf = new short[n];
+            double[] harm = { 1.0, 0.5, 0.35, 0.22, 0.14, 0.08 };
+            double norm = 0; foreach (double h in harm) norm += h;
+            Random rnd = new Random(7);
             double phase = 0;
             for (int i = 0; i < n; i++)
             {
                 double t = (double)i / Rate;
-                double pos = (t % cycle) / cycle;                       // 0..1
-                double k = pos < 0.5 ? pos * 2 : (1 - pos) * 2;          // 0..1..0
-                k = 0.5 - 0.5 * Math.Cos(Math.PI * k);                   // плавнее
-                double f = 450 + 650 * k;
+                double f = SirenFreq(t) * (1 + 0.004 * Math.Sin(2 * Math.PI * 5.5 * t));
                 phase += 2 * Math.PI * f / Rate;
-                double v = 0.62 * Math.Sin(phase) + 0.25 * Math.Sin(2 * phase) + 0.12 * Math.Sin(3 * phase);
-                double env = Math.Min(1.0, t / 0.3) * Math.Min(1.0, (n - i) / (Rate * 0.5));
-                buf[i] = (short)(v * env * 0.8 * 32767);
+                double v = 0;
+                for (int h = 0; h < harm.Length; h++) v += harm[h] * Math.Sin((h + 1) * phase);
+                v = v / norm + 0.03 * (rnd.NextDouble() * 2 - 1);
+                v = Math.Tanh(1.8 * v) / Math.Tanh(1.8);
+                double env = Math.Min(1.0, f / 400.0) * Math.Min(1.0, t / 0.2) * Math.Min(1.0, (n - i) / (Rate * 0.4));
+                buf[i] = (short)(v * env * 0.85 * 32767);
             }
             return ToWav(buf);
         }
 
-        // Отбой: спокойный восходящий трезвучный сигнал, два раза
+        // Отбой: спокойный восходящий сигнал, два раза
         static byte[] AllClear()
         {
             double[] notes = { 523.25, 659.25, 783.99, 1046.5 };
@@ -306,7 +383,8 @@ namespace Trevoga
     class MainForm : Form
     {
         Settings settings;
-        ComboBox cbRegion;
+        ComboBox cbRegion, cbRaion;
+        bool loading = true;
         Label lblStatus, lblInfo;
         CheckBox chkSound, chkAutorun;
         Button btnTestAlarm, btnTestClear, btnStop;
@@ -328,7 +406,7 @@ namespace Trevoga
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(420, 300);
+            ClientSize = new Size(420, 334);
             Icon = SystemIcons.Shield;
 
             Label l1 = new Label();
@@ -342,20 +420,43 @@ namespace Trevoga
             cbRegion.Location = new Point(85, 13);
             cbRegion.Width = 320;
             cbRegion.Items.AddRange(AlertSource.Regions);
-            int idx = Array.IndexOf(AlertSource.Regions, settings.Region);
-            cbRegion.SelectedIndex = idx >= 0 ? idx : 9;
-            cbRegion.SelectedIndexChanged += delegate
-            {
-                settings.Region = (string)cbRegion.SelectedItem;
-                settings.Save();
-                state = AlertState.Unknown;
-                firstCheck = true;
-                CheckNow();
-            };
             Controls.Add(cbRegion);
 
+            Label l2 = new Label();
+            l2.Text = "Район:";
+            l2.Location = new Point(14, 51);
+            l2.AutoSize = true;
+            Controls.Add(l2);
+
+            cbRaion = new ComboBox();
+            cbRaion.DropDownStyle = ComboBoxStyle.DropDownList;
+            cbRaion.Location = new Point(85, 47);
+            cbRaion.Width = 320;
+            Controls.Add(cbRaion);
+
+            int idx = Array.IndexOf(AlertSource.Regions, settings.Region);
+            cbRegion.SelectedIndex = idx >= 0 ? idx : 9;
+            settings.Region = (string)cbRegion.SelectedItem;
+            FillRaions(settings.Raion);
+
+            cbRegion.SelectedIndexChanged += delegate
+            {
+                if (loading) return;
+                settings.Region = (string)cbRegion.SelectedItem;
+                FillRaions(0);
+                settings.Raion = 0;
+                SettingsChanged();
+            };
+            cbRaion.SelectedIndexChanged += delegate
+            {
+                if (loading) return;
+                RaionItem it = cbRaion.SelectedItem as RaionItem;
+                settings.Raion = it != null ? it.Uid : 0;
+                SettingsChanged();
+            };
+
             lblStatus = new Label();
-            lblStatus.Location = new Point(14, 50);
+            lblStatus.Location = new Point(14, 84);
             lblStatus.Size = new Size(392, 80);
             lblStatus.TextAlign = ContentAlignment.MiddleCenter;
             lblStatus.Font = new Font("Segoe UI", 20f, FontStyle.Bold);
@@ -365,14 +466,14 @@ namespace Trevoga
             Controls.Add(lblStatus);
 
             lblInfo = new Label();
-            lblInfo.Location = new Point(14, 135);
+            lblInfo.Location = new Point(14, 169);
             lblInfo.Size = new Size(392, 36);
             lblInfo.ForeColor = Color.DimGray;
             Controls.Add(lblInfo);
 
             chkSound = new CheckBox();
             chkSound.Text = "Звук включён";
-            chkSound.Location = new Point(14, 178);
+            chkSound.Location = new Point(14, 212);
             chkSound.AutoSize = true;
             chkSound.Checked = settings.Sound;
             chkSound.CheckedChanged += delegate
@@ -385,22 +486,22 @@ namespace Trevoga
 
             chkAutorun = new CheckBox();
             chkAutorun.Text = "Запускать вместе с Windows";
-            chkAutorun.Location = new Point(185, 178);
+            chkAutorun.Location = new Point(185, 212);
             chkAutorun.AutoSize = true;
             chkAutorun.Checked = IsAutorun();
             chkAutorun.CheckedChanged += delegate { SetAutorun(chkAutorun.Checked); };
             Controls.Add(chkAutorun);
 
-            btnTestAlarm = MakeButton("Тест тревоги", 14, 212);
+            btnTestAlarm = MakeButton("Тест тревоги", 14, 246);
             btnTestAlarm.Click += delegate { Sounds.Play(true); };
-            btnTestClear = MakeButton("Тест отбоя", 148, 212);
+            btnTestClear = MakeButton("Тест отбоя", 148, 246);
             btnTestClear.Click += delegate { Sounds.Play(false); };
-            btnStop = MakeButton("Стоп звук", 282, 212);
+            btnStop = MakeButton("Стоп звук", 282, 246);
             btnStop.Click += delegate { Sounds.Stop(); };
 
             Label hint = new Label();
             hint.Text = "Крестик сворачивает программу к часам. Выход — правый клик по значку.";
-            hint.Location = new Point(14, 255);
+            hint.Location = new Point(14, 289);
             hint.Size = new Size(392, 36);
             hint.ForeColor = Color.Gray;
             Controls.Add(hint);
@@ -425,6 +526,50 @@ namespace Trevoga
             timer.Start();
 
             settings.Save();   // создаёт trevoga.ini при первом запуске
+            loading = false;
+        }
+
+        class RaionItem
+        {
+            public int Uid; public string Name;
+            public override string ToString() { return Name; }
+        }
+
+        void FillRaions(int selectUid)
+        {
+            bool was = loading;
+            loading = true;
+            cbRaion.Items.Clear();
+            RaionItem all = new RaionItem(); all.Uid = 0; all.Name = "Вся область";
+            cbRaion.Items.Add(all);
+            int obl = AlertSource.OblastUid(settings.Region);
+            int sel = 0;
+            for (int i = 0; i < Locations.RaionUid.Length; i++)
+            {
+                if (Locations.RaionOblast[i] != obl) continue;
+                RaionItem it = new RaionItem(); it.Uid = Locations.RaionUid[i]; it.Name = Locations.RaionName[i];
+                cbRaion.Items.Add(it);
+                if (it.Uid == selectUid) sel = cbRaion.Items.Count - 1;
+            }
+            cbRaion.SelectedIndex = sel;
+            settings.Raion = ((RaionItem)cbRaion.SelectedItem).Uid;
+            loading = was;
+        }
+
+        void SettingsChanged()
+        {
+            settings.Save();
+            state = AlertState.Unknown;
+            firstCheck = true;
+            requestId++;          // ответ на старый запрос (другая область) не применяем
+            checking = false;
+            CheckNow();
+        }
+
+        string PlaceName()
+        {
+            string r = settings.Raion != 0 ? AlertSource.RaionName(settings.Raion) : null;
+            return r != null ? r + " (" + settings.Region + ")" : settings.Region;
         }
 
         Button MakeButton(string text, int x, int y)
@@ -524,7 +669,7 @@ namespace Trevoga
 
             AlertState old = state;
             state = result;
-            string region = settings.Region;
+            string region = PlaceName();
             if (state == AlertState.Alert)
             {
                 lblStatus.BackColor = Color.FromArgb(200, 30, 30);

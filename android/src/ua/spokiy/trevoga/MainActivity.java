@@ -31,6 +31,10 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     private TextView status, info;
     private Button toggle;
     private SharedPreferences prefs;
+    private Spinner raionSpinner;
+    private TextView soundInfo;
+    private final java.util.ArrayList<Integer> raionUids = new java.util.ArrayList<Integer>();
+    private static final int PICK_ALARM = 11, PICK_CLEAR = 12;
 
     @Override
     protected void onCreate(Bundle b) {
@@ -63,13 +67,31 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
                 String r = AlertSource.REGIONS[pos];
                 if (!r.equals(Prefs.region(MainActivity.this))) {
-                    prefs.edit().putString(Prefs.REGION, r).putInt(Prefs.STATE, AlertSource.UNKNOWN).apply();
+                    prefs.edit().putString(Prefs.REGION, r).putInt(Prefs.RAION, 0)
+                            .putInt(Prefs.STATE, AlertSource.UNKNOWN).remove(Prefs.STATUS_TIME).apply();
+                    fillRaions();
                     if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.checkNow(MainActivity.this);
                 }
             }
             public void onNothingSelected(AdapterView<?> p) { }
         });
         root.addView(spinner);
+
+        root.addView(label("Район:"));
+        raionSpinner = new Spinner(this);
+        raionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
+            public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
+                int uid = raionUids.get(pos);
+                if (uid != Prefs.raion(MainActivity.this)) {
+                    prefs.edit().putInt(Prefs.RAION, uid).putInt(Prefs.STATE, AlertSource.UNKNOWN)
+                            .remove(Prefs.STATUS_TIME).apply();
+                    if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.checkNow(MainActivity.this);
+                }
+            }
+            public void onNothingSelected(AdapterView<?> p) { }
+        });
+        root.addView(raionSpinner);
+        fillRaions();
 
         status = new TextView(this);
         status.setTextSize(26);
@@ -115,6 +137,26 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         }), weight());
         root.addView(row);
 
+        root.addView(label("Звуки:"));
+        LinearLayout row2 = new LinearLayout(this);
+        row2.setOrientation(LinearLayout.HORIZONTAL);
+        row2.addView(button("Свой звук тревоги…", new View.OnClickListener() {
+            public void onClick(View v) { pickSound(PICK_ALARM); }
+        }), weight());
+        row2.addView(button("Свой звук отбоя…", new View.OnClickListener() {
+            public void onClick(View v) { pickSound(PICK_CLEAR); }
+        }), weight());
+        root.addView(row2);
+        soundInfo = new TextView(this);
+        soundInfo.setTextColor(Color.GRAY);
+        root.addView(soundInfo);
+        root.addView(button("Вернуть встроенные звуки", new View.OnClickListener() {
+            public void onClick(View v) {
+                prefs.edit().remove(Prefs.SOUND_ALARM).remove(Prefs.SOUND_CLEAR).apply();
+                refresh();
+            }
+        }));
+
         root.addView(button("Работа в фоне (экономия батареи)", new View.OnClickListener() {
             public void onClick(View v) { askBattery(true); }
         }));
@@ -153,6 +195,51 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
 
         if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.start(this);
         askBattery(false);
+    }
+
+    private void fillRaions() {
+        raionUids.clear();
+        java.util.ArrayList<String> names = new java.util.ArrayList<String>();
+        raionUids.add(0);
+        names.add("Вся область");
+        int obl = Locations.oblastUid(Prefs.region(this));
+        int sel = 0, cur = Prefs.raion(this);
+        for (int i = 0; i < Locations.RAION_UID.length; i++) {
+            if (Locations.RAION_OBLAST[i] != obl) continue;
+            raionUids.add(Locations.RAION_UID[i]);
+            names.add(Locations.RAION_NAME[i]);
+            if (Locations.RAION_UID[i] == cur) sel = names.size() - 1;
+        }
+        if (sel == 0 && cur != 0) prefs.edit().putInt(Prefs.RAION, 0).apply();
+        ArrayAdapter<String> ad = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, names);
+        ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
+        raionSpinner.setAdapter(ad);
+        raionSpinner.setSelection(sel);
+    }
+
+    private void pickSound(int code) {
+        Intent i = new Intent(Intent.ACTION_OPEN_DOCUMENT);
+        i.addCategory(Intent.CATEGORY_OPENABLE);
+        i.setType("audio/*");
+        try { startActivityForResult(i, code); }
+        catch (Exception e) {
+            try {
+                startActivityForResult(new Intent(Intent.ACTION_GET_CONTENT).setType("audio/*")
+                        .addCategory(Intent.CATEGORY_OPENABLE), code);
+            } catch (Exception ignored) { }
+        }
+    }
+
+    @Override
+    protected void onActivityResult(int code, int result, Intent data) {
+        super.onActivityResult(code, result, data);
+        if (result != RESULT_OK || data == null || data.getData() == null) return;
+        Uri uri = data.getData();
+        try { getContentResolver().takePersistableUriPermission(uri, Intent.FLAG_GRANT_READ_URI_PERMISSION); }
+        catch (Exception ignored) { }
+        prefs.edit().putString(code == PICK_ALARM ? Prefs.SOUND_ALARM : Prefs.SOUND_CLEAR, uri.toString()).apply();
+        Sounds.play(this, code == PICK_ALARM);
+        refresh();
     }
 
     private void askBattery(boolean force) {
@@ -220,8 +307,10 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         String t = prefs.getString(Prefs.STATUS_TIME, null);
         if (!on) info.setText("");
         else if (err != null) info.setText(err);
-        else if (t != null) info.setText(Prefs.region(this) + " · проверено в " + t + " · " + prefs.getString(Prefs.SOURCE, ""));
+        else if (t != null) info.setText(Prefs.place(this) + " · проверено в " + t + " · " + prefs.getString(Prefs.SOURCE, ""));
         else info.setText("");
+        if (soundInfo != null) soundInfo.setText("Тревога: " + (prefs.contains(Prefs.SOUND_ALARM) ? "свой файл" : "встроенная сирена")
+                + " · Отбой: " + (prefs.contains(Prefs.SOUND_CLEAR) ? "свой файл" : "встроенный сигнал"));
         toggle.setText(on ? "Выключить слежение" : "Включить слежение");
     }
 

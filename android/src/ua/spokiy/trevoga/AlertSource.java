@@ -66,23 +66,34 @@ final class AlertSource {
         return sb.toString();
     }
 
-    static int check(String region, String token, boolean partial) throws Exception {
+    static String raionName(int uid) {
+        for (int i = 0; i < Locations.RAION_UID.length; i++) if (Locations.RAION_UID[i] == uid) return Locations.RAION_NAME[i];
+        return null;
+    }
+
+    private static char charAt(String str, int uid) throws Exception {
+        if (uid < 0 || uid >= str.length() || str.charAt(uid) == ' ') throw new Exception("неожиданный ответ сервера");
+        return Character.toUpperCase(str.charAt(uid));
+    }
+
+    /** raion — uid района alerts.in.ua, 0 = вся область. */
+    static int check(String region, int raion, String token, boolean partial) throws Exception {
         if (token != null && token.trim().length() > 0) {
             lastSource = "alerts.in.ua";
-            int idx = indexOf(region);
-            if (idx < 0) throw new Exception("неизвестная область");
-            String body = download("https://api.alerts.in.ua/v1/iot/active_air_raid_alerts_by_oblast.json", token.trim());
-            String str = body.trim();
+            int obl = Locations.oblastUid(region);
+            if (obl < 0) throw new Exception("неизвестная область");
+            String str = download("https://api.alerts.in.ua/v1/iot/active_air_raid_alerts.json", token.trim()).trim();
             if (str.startsWith("\"")) str = str.substring(1);
             if (str.endsWith("\"")) str = str.substring(0, str.length() - 1);
-            if (str.length() <= idx) throw new Exception("неожиданный ответ сервера");
-            char c = Character.toUpperCase(str.charAt(idx));
+            char o = charAt(str, obl);
+            if (o == 'A') return ALERT;                       // тревога по всей области
+            char c = raion != 0 ? charAt(str, raion) : o;
             if (c == 'A') return ALERT;
             if (c == 'P') return partial ? ALERT : CLEAR;
             if (c == 'N') return CLEAR;
             throw new Exception("неожиданный ответ сервера");
         }
-        lastSource = "ubilling.net.ua";
+        lastSource = raion != 0 ? "ubilling.net.ua · район без токена недоступен, следим за всей областью" : "ubilling.net.ua";
         if (region.equals("Автономна Республіка Крим"))
             throw new Exception("для Крыма нужен токен alerts.in.ua");
         String name = region.equals("м. Севастополь") ? "Севастополь" : region;

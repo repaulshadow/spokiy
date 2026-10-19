@@ -26,7 +26,7 @@ public class MonitorService extends Service {
     private HandlerThread thread;
     private Handler handler;
     private PowerManager.WakeLock wakeLock;
-    private String lastRegion = null;
+    private String lastPlace = null;
     private boolean firstCheck = true;
 
     static void start(Context c) {
@@ -77,23 +77,27 @@ public class MonitorService extends Service {
     private void checkOnce() {
         SharedPreferences p = Prefs.get(this);
         String region = Prefs.region(this);
+        int raion = Prefs.raion(this);
+        String place = region + "|" + raion;
         String token = p.getString(Prefs.TOKEN, "");
         boolean partial = p.getBoolean(Prefs.PARTIAL, false);
-        if (!region.equals(lastRegion)) {
-            lastRegion = region;
+        if (!place.equals(lastPlace)) {
+            lastPlace = place;
             firstCheck = true;
         }
         String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
 
         int result;
         try {
-            result = AlertSource.check(region, token, partial);
+            result = AlertSource.check(region, raion, token, partial);
         } catch (Exception e) {
             p.edit().putString(Prefs.ERROR, "Нет связи (" + time + "): " + e.getMessage()).apply();
-            updateStatus(p.getInt(Prefs.STATE, AlertSource.UNKNOWN), region, true);
+            updateStatus(p.getInt(Prefs.STATE, AlertSource.UNKNOWN), Prefs.place(this), true);
             return;
         }
 
+        if (!place.equals(Prefs.region(this) + "|" + Prefs.raion(this))) return; // место сменили во время запроса
+        region = Prefs.place(this);
         int old = firstCheck ? AlertSource.UNKNOWN : p.getInt(Prefs.STATE, AlertSource.UNKNOWN);
         p.edit().putInt(Prefs.STATE, result).putString(Prefs.STATUS_TIME, time)
                 .putString(Prefs.SOURCE, AlertSource.lastSource).remove(Prefs.ERROR).apply();

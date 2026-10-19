@@ -8,6 +8,7 @@ import android.os.Build;
 
 final class Prefs {
     static final String NAME = "trevoga";
+    static final String RAION = "raion", SOUND_ALARM = "sound_alarm", SOUND_CLEAR = "sound_clear";
     static final String REGION = "region", TOKEN = "token", PARTIAL = "partial", ENABLED = "enabled",
             STATE = "state", STATUS_TIME = "status_time", ERROR = "error", SOURCE = "source",
             ASKED_BATTERY = "asked_battery";
@@ -20,6 +21,16 @@ final class Prefs {
 
     static String region(Context c) {
         return get(c).getString(REGION, "м. Київ");
+    }
+
+    static int raion(Context c) {
+        return get(c).getInt(RAION, 0);
+    }
+
+    /** "Район (Область)" или просто область. */
+    static String place(Context c) {
+        String r = raion(c) != 0 ? AlertSource.raionName(raion(c)) : null;
+        return r != null ? r + " (" + region(c) + ")" : region(c);
     }
 
     /** Каналы уведомлений (Android 8+). Создаём через рефлексию — проект собирается против API 23. */
