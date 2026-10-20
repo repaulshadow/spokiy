@@ -104,7 +104,13 @@ export class AlertsHub {
 
   async fetch(request) {
     await this.load();
-    const now = Date.now();
+    let now = Date.now();
+    const d0 = this.due(now);
+    if (d0.ain || d0.nep) {
+      if (!this.pending) this.pending = this.refresh().finally(() => { this.pending = null; });
+      await this.pending;
+      now = Date.now();
+    }
     if (new URL(request.url).pathname === "/health") {
       return json({
         ok: !!(this.fresh(this.ain, now) || this.fresh(this.nep, now)),
@@ -115,11 +121,6 @@ export class AlertsHub {
           neptun: { ok: !!this.fresh(this.nep, now), age_s: this.nep.okAt ? Math.round((now - this.nep.okAt) / 1000) : null, error: this.nep.err },
         },
       });
-    }
-    const d = this.due(now);
-    if (d.ain || d.nep) {
-      if (!this.pending) this.pending = this.refresh().finally(() => { this.pending = null; });
-      await this.pending;
     }
     return this.reply();
   }
