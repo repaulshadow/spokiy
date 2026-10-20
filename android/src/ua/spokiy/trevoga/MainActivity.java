@@ -395,7 +395,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     }
 
     private TextView chip(String s, boolean hot) {
-        TextView t = text(s, 13, hot ? DARK_RED : Color.WHITE, true);
+        TextView t = text(s, 13, hot ? MonitorService.PURPLE : Color.WHITE, true);
         t.setPadding(dp(12), dp(6), dp(12), dp(6));
         GradientDrawable g = new GradientDrawable();
         g.setColor(hot ? Color.WHITE : 0x38FFFFFF);
@@ -564,12 +564,15 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             paintCard(GRAY);
         } else if (state == AlertSource.ALERT) {
             boolean ballistic = threats.contains("ballistic_missiles");
+            String lv = prefs.getString(Prefs.LEVEL, "");
+            boolean yellow = lv.equals("yellow") && !ballistic;
             title.setText(ballistic ? "БАЛІСТИКА!" : "ПОВІТРЯНА ТРИВОГА");
-            detail.setText((since > 0 ? "Триває " + ago(since) + " · з " + hm.format(new Date(since)) : "Пройдіть в укриття")
+            String lvText = ballistic || lv.equals("red") ? "Червоний рівень · " : yellow ? "Жовтий рівень · " : "";
+            detail.setText(lvText + (since > 0 ? "триває " + ago(since) + " · з " + hm.format(new Date(since)) : "пройдіть в укриття")
                     + (prefs.getBoolean(Prefs.DISAGREE, false) ? " · підтверджує 1 з 2 джерел" : ""));
             for (int i = 0; i < threats.size(); i++)
                 chips.addView(chip(AlertSource.threatTitle(threats.get(i)), ballistic && i == 0));
-            paintCard(ballistic ? DARK_RED : RED);
+            paintCard(ballistic ? MonitorService.PURPLE : yellow ? MonitorService.YELLOW : RED);
         } else if (state == AlertSource.CLEAR) {
             title.setText("Тривоги немає");
             detail.setText(cleared > 0 ? "Відбій о " + hm.format(new Date(cleared)) : "Спокійно");

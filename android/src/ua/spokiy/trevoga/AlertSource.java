@@ -49,6 +49,7 @@ final class AlertSource {
         String source = "";
         String note = "";
         boolean disagree = false;
+        String level = "";       // рівень тривоги: "red" | "yellow" | "" (невідомо)
     }
 
     static int indexOf(String region) {
@@ -274,6 +275,7 @@ final class AlertSource {
         Result r = new Result();
         int ain = UNKNOWN, nepState = UNKNOWN;
         long ainSince = 0, nepSince = 0;
+        String ainLevel = "";
 
         // --- Джерело 1: alerts.in.ua
         if (air != null) {
@@ -296,6 +298,9 @@ final class AlertSource {
                     }
                     if (raion == 0 && u != obl && !(partial || o == 'A')) continue;   // лише частина області
                     if (!a.isNull("s")) ainSince = earliest(ainSince, parseIso(a.optString("s", "")));
+                    String lv = a.isNull("l") ? "" : a.optString("l", "");
+                    if (lv.equals("red")) ainLevel = "red";
+                    else if (lv.equals("yellow") && !ainLevel.equals("red")) ainLevel = "yellow";
                     JSONArray t = a.optJSONArray("t");
                     if (t != null) for (int j = 0; j < t.length(); j++) {
                         String ts = t.optString(j, "");
@@ -339,6 +344,8 @@ final class AlertSource {
 
         // --- Зведення: тривога, якщо її показує хоча б одне джерело
         r.state = (ain == ALERT || nepState == ALERT) ? ALERT : CLEAR;
+        // Рівень: з alerts.in.ua; якщо тривогу бачить лише NEPTUN — рівень невідомий, показуємо червоний
+        if (r.state == ALERT) r.level = ain == ALERT && ainLevel.length() > 0 ? ainLevel : "red";
         if (ain == ALERT) r.since = earliest(r.since, ainSince);
         if (nepState == ALERT) r.since = earliest(r.since, nepSince);
         r.source = ain != UNKNOWN && nepState != UNKNOWN ? "alerts.in.ua + NEPTUN" : ain != UNKNOWN ? "alerts.in.ua" : "NEPTUN";

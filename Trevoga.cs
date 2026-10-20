@@ -20,7 +20,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("2.6.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.7.0.0")]
 
 namespace Trevoga
 {
@@ -270,6 +270,7 @@ namespace Trevoga
         public string Source = "";
         public string Note = "";         // пояснення: сервер недоступний, збіг джерел тощо
         public bool Disagree = false;    // джерела показують різне
+        public string Level = "";        // рівень тривоги: "red" | "yellow" | "" (невідомо)
     }
 
     static class AlertSource
@@ -475,6 +476,7 @@ namespace Trevoga
             CheckResult r = new CheckResult();
             AlertState ain = AlertState.Unknown, nepState = AlertState.Unknown;
             CheckResult ainRes = new CheckResult(), nepRes = new CheckResult();
+            string ainLevel = "";
 
             // --- Джерело 1: alerts.in.ua
             if (air != null)
@@ -504,6 +506,12 @@ namespace Trevoga
                             }
                             if (s.Raion == 0 && u != obl && !(s.Partial || o == 'A')) continue;   // лише частина області
                             if (a.TryGetValue("s", out x)) Earliest(ainRes, ParseIso(x));
+                            if (a.TryGetValue("l", out x) && x != null)
+                            {
+                                string lv = Convert.ToString(x);
+                                if (lv == "red") ainLevel = "red";
+                                else if (lv == "yellow" && ainLevel != "red") ainLevel = "yellow";
+                            }
                             if (a.TryGetValue("t", out x) && x is List<object>)
                                 foreach (object t in (List<object>)x)
                                 {
@@ -551,6 +559,8 @@ namespace Trevoga
 
             // --- Зведення: тривога, якщо її показує хоча б одне джерело
             r.State = (ain == AlertState.Alert || nepState == AlertState.Alert) ? AlertState.Alert : AlertState.Clear;
+            // Рівень: з alerts.in.ua; якщо тривогу бачить лише NEPTUN — рівень невідомий, показуємо червоний
+            if (r.State == AlertState.Alert) r.Level = ain == AlertState.Alert && ainLevel.Length > 0 ? ainLevel : "red";
             if (ain == AlertState.Alert) Earliest(r, ainRes.Since);
             if (nepState == AlertState.Alert) Earliest(r, nepRes.Since);
 
@@ -938,6 +948,8 @@ namespace Trevoga
         public static readonly Color Line = Color.FromArgb(229, 231, 235);
         public static readonly Color Red = Color.FromArgb(220, 38, 38);
         public static readonly Color DarkRed = Color.FromArgb(153, 27, 27);
+        public static readonly Color Yellow = Color.FromArgb(217, 119, 6);      // жовтий рівень (дрони)
+        public static readonly Color Purple = Color.FromArgb(124, 58, 237);    // балістика (наша позначка)
         public static readonly Color Green = Color.FromArgb(22, 163, 74);
         public static readonly Color Gray = Color.FromArgb(107, 114, 128);
 
@@ -972,6 +984,7 @@ namespace Trevoga
         public string Detail = "";
         public List<string> Chips = new List<string>();
         public bool HotFirstChip = false;     // перша плашка — балістика, виділяємо
+        public Color HotColor = Gfx.DarkRed;
         public Color CardColor = Gfx.Gray;
 
         public StatusCard()
@@ -1029,7 +1042,7 @@ namespace Trevoga
                     using (GraphicsPath p = Gfx.Round(cr, 13))
                     using (SolidBrush b = new SolidBrush(hot ? Color.White : Color.FromArgb(55, 255, 255, 255)))
                         g.FillPath(b, p);
-                    using (SolidBrush t = new SolidBrush(hot ? Gfx.DarkRed : Color.White))
+                    using (SolidBrush t = new SolidBrush(hot ? HotColor : Color.White))
                     {
                         StringFormat sf = new StringFormat();
                         sf.Alignment = StringAlignment.Center;
@@ -1120,7 +1133,8 @@ namespace Trevoga
         Label lblFooter;
         NotifyIcon tray;
         System.Windows.Forms.Timer timer, configTimer;
-        Icon icoRed, icoGreen, icoGray;
+        Icon icoRed, icoGreen, icoGray, icoYellow, icoPurple;
+        string level = "";
         AlertState state = AlertState.Unknown;
         List<string> threats = new List<string>();
         DateTime? since;
@@ -1140,6 +1154,8 @@ namespace Trevoga
             server = settings.Server.Length > 0 ? settings.Server : AppConfig.Embedded();
 
             icoRed = Gfx.Dot(Gfx.Red, 32);
+            icoYellow = Gfx.Dot(Gfx.Yellow, 32);
+            icoPurple = Gfx.Dot(Gfx.Purple, 32);
             icoGreen = Gfx.Dot(Gfx.Green, 32);
             icoGray = Gfx.Dot(Gfx.Gray, 32);
 
@@ -1421,6 +1437,7 @@ namespace Trevoga
             state = AlertState.Unknown;
             firstCheck = true;
             threats = new List<string>();
+            level = "";
             since = null;
             clearedAt = null;
             requestId++;          // відповідь на старий запит (інше місце) не застосовуємо
@@ -1541,12 +1558,15 @@ namespace Trevoga
             if (state == AlertState.Alert)
             {
                 bool ballistic = threats.Contains("ballistic_missiles");
+                bool yellow = level == "yellow" && !ballistic;
                 card.Title = ballistic ? "БАЛІСТИКА!" : "ПОВІТРЯНА ТРИВОГА";
-                card.CardColor = ballistic ? Gfx.DarkRed : Gfx.Red;
-                card.Detail = since.HasValue ? "Триває " + Ago(since.Value) + " · з " + since.Value.ToString("HH:mm") : "Пройдіть в укриття";
+                card.CardColor = ballistic ? Gfx.Purple : yellow ? Gfx.Yellow : Gfx.Red;
+                card.Detail = (ballistic ? "Червоний рівень · " : yellow ? "Жовтий рівень · " : level == "red" ? "Червоний рівень · " : "")
+                    + (since.HasValue ? "триває " + Ago(since.Value) + " · з " + since.Value.ToString("HH:mm") : "пройдіть в укриття");
                 if (lastDisagree) card.Detail += " · підтверджує 1 з 2 джерел";
                 foreach (string t in threats) card.Chips.Add(AlertSource.ThreatTitle(t));
                 card.HotFirstChip = ballistic;
+                card.HotColor = ballistic ? Gfx.Purple : Gfx.DarkRed;
             }
             else if (state == AlertState.Clear)
             {
@@ -1573,7 +1593,9 @@ namespace Trevoga
             if (lastNote.StartsWith("!") && state != AlertState.Unknown) foot += " · немає зв'язку: " + lastNote.Substring(1);
             lblFooter.Text = (foot.Length > 0 ? foot + "\n" : "") + "Хрестик ховає програму до годинника. Вихід — правою кнопкою на значку.";
 
-            Icon ic = state == AlertState.Alert ? icoRed : state == AlertState.Clear ? icoGreen : icoGray;
+            Icon ic = state == AlertState.Alert
+                ? (threats.Contains("ballistic_missiles") ? icoPurple : level == "yellow" ? icoYellow : icoRed)
+                : state == AlertState.Clear ? icoGreen : icoGray;
             tray.Icon = ic;
             Icon = ic;
             string tip = (state == AlertState.Alert ? "ТРИВОГА: " : state == AlertState.Clear ? "Тривоги немає: " : "Тривога: ") + PlaceName();
@@ -1595,8 +1617,10 @@ namespace Trevoga
 
             AlertState old = state;
             List<string> oldThreats = threats;
+            string oldLevel = level;
             state = r.State;
             threats = r.Threats;
+            level = r.Level;
             if (state == AlertState.Alert)
             {
                 if (r.Since.HasValue) since = r.Since;
@@ -1636,7 +1660,14 @@ namespace Trevoga
             else if (old != AlertState.Alert && state == AlertState.Alert)
             {
                 if (settings.Sound) Sounds.Alarm(threats);
-                tray.ShowBalloonTip(10000, "ПОВІТРЯНА ТРИВОГА!", place + ". Пройдіть в укриття!"
+                tray.ShowBalloonTip(10000, level == "yellow" ? "ПОВІТРЯНА ТРИВОГА — жовтий рівень" : "ПОВІТРЯНА ТРИВОГА!",
+                    place + ". Пройдіть в укриття!" + (th.Length > 0 ? "\n" + th : ""), ToolTipIcon.Error);
+            }
+            else if (old == AlertState.Alert && state == AlertState.Alert && oldLevel == "yellow" && level == "red")
+            {
+                // Рівень підвищено: жовтий → червоний — повна сирена
+                if (settings.Sound) Sounds.Alarm(threats);
+                tray.ShowBalloonTip(10000, "ЧЕРВОНИЙ РІВЕНЬ ТРИВОГИ!", place + ". Негайно в укриття!"
                     + (th.Length > 0 ? "\n" + th : ""), ToolTipIcon.Error);
             }
             else if (old == AlertState.Alert && state == AlertState.Alert && added.Count > 0)

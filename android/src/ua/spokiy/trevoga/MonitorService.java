@@ -113,6 +113,7 @@ public class MonitorService extends Service {
 
         int old = firstCheck ? AlertSource.UNKNOWN : p.getInt(Prefs.STATE, AlertSource.UNKNOWN);
         List<String> oldThreats = parseList(p.getString(Prefs.THREATS, ""));
+        String oldLevel = old == AlertSource.ALERT ? p.getString(Prefs.LEVEL, "") : "";
         List<String> threats = r.threats;
         List<String> added = new ArrayList<String>();
         if (r.state == AlertSource.ALERT) for (String t : threats) if (!oldThreats.contains(t)) added.add(t);
@@ -130,7 +131,7 @@ public class MonitorService extends Service {
         }
 
         p.edit().putInt(Prefs.STATE, r.state).putString(Prefs.STATUS_TIME, time).putString(Prefs.THREATS, join(threats))
-                .putString(Prefs.SOURCE, r.source).putString(Prefs.NOTE, r.note).putBoolean(Prefs.DISAGREE, r.disagree)
+                .putString(Prefs.SOURCE, r.source).putString(Prefs.NOTE, r.note).putBoolean(Prefs.DISAGREE, r.disagree).putString(Prefs.LEVEL, r.level)
                 .putLong(Prefs.SINCE, since).putLong(Prefs.CLEARED_AT, clearedAt)
                 .remove(Prefs.ERROR).apply();
         String placeName = Prefs.place(this);
@@ -144,13 +145,19 @@ public class MonitorService extends Service {
         boolean quiet = p.getBoolean(Prefs.NOTIFY_ONLY, false);   // «лише сповіщення»: без голосу і сирени
         if (added.contains("ballistic_missiles")) {
             if (!quiet) Sounds.ballistic(this, old != AlertSource.ALERT, threats);   // балістика — окремий терміновий сигнал
-            showAlert(this, "БАЛІСТИКА!", placeName + ". Негайно в укриття!" + (th.length() > 0 ? "\n" + th : ""), DARK_RED, quiet);
+            showAlert(this, "БАЛІСТИКА!", placeName + ". Негайно в укриття!" + (th.length() > 0 ? "\n" + th : ""), PURPLE, quiet);
         } else if (old != AlertSource.ALERT && r.state == AlertSource.ALERT) {
             if (!quiet) Sounds.alarm(this, threats);
-            showAlert(this, "ПОВІТРЯНА ТРИВОГА!", placeName + ". Пройдіть в укриття!" + (th.length() > 0 ? "\n" + th : ""), RED, quiet);
+            boolean y = r.level.equals("yellow");
+            showAlert(this, y ? "ПОВІТРЯНА ТРИВОГА — жовтий рівень" : "ПОВІТРЯНА ТРИВОГА!",
+                    placeName + ". Пройдіть в укриття!" + (th.length() > 0 ? "\n" + th : ""), y ? YELLOW : RED, quiet);
+        } else if (old == AlertSource.ALERT && r.state == AlertSource.ALERT && oldLevel.equals("yellow") && r.level.equals("red")) {
+            // Рівень підвищено: жовтий → червоний — повна сирена
+            if (!quiet) Sounds.alarm(this, threats);
+            showAlert(this, "ЧЕРВОНИЙ РІВЕНЬ ТРИВОГИ!", placeName + ". Негайно в укриття!" + (th.length() > 0 ? "\n" + th : ""), RED, quiet);
         } else if (old == AlertSource.ALERT && r.state == AlertSource.ALERT && !added.isEmpty()) {
             if (!quiet) Sounds.newThreats(this, added);
-            showAlert(this, "Нова загроза", placeName + ": " + AlertSource.titles(added), RED, quiet);
+            showAlert(this, "Нова загроза", placeName + ": " + AlertSource.titles(added), r.level.equals("yellow") ? YELLOW : RED, quiet);
         } else if (old == AlertSource.ALERT && r.state == AlertSource.CLEAR) {
             if (!quiet) Sounds.clear(this);
             showAlert(this, "Відбій тривоги", placeName, GREEN, quiet);
@@ -176,7 +183,8 @@ public class MonitorService extends Service {
                 : "Немає даних — " + region;
         if (error) text += " (немає зв'язку)";
         lastStatusColor = state == AlertSource.ALERT
-                ? (parseList(Prefs.get(this).getString(Prefs.THREATS, "")).contains("ballistic_missiles") ? DARK_RED : RED)
+                ? (parseList(Prefs.get(this).getString(Prefs.THREATS, "")).contains("ballistic_missiles") ? PURPLE
+                   : Prefs.get(this).getString(Prefs.LEVEL, "").equals("yellow") ? YELLOW : RED)
                 : state == AlertSource.CLEAR ? GREEN : GRAY;
         lastStatusTitle = state == AlertSource.ALERT ? "ПОВІТРЯНА ТРИВОГА" : "Тривога: стежу";
         if (state != AlertSource.ALERT) text = error ? "Немає зв'язку" : region;
@@ -184,7 +192,8 @@ public class MonitorService extends Service {
                 .notify(NOTIF_STATUS, statusNotification(text));
     }
 
-    static final int RED = 0xFFDC2626, DARK_RED = 0xFF991B1B, GREEN = 0xFF16A34A, GRAY = 0xFF6B7280;
+    static final int RED = 0xFFDC2626, DARK_RED = 0xFF991B1B, GREEN = 0xFF16A34A, GRAY = 0xFF6B7280,
+            YELLOW = 0xFFD97706, PURPLE = 0xFF7C3AED;
     private int lastStatusColor = GRAY;
     private String lastStatusTitle = "Тривога: стежу";
 
@@ -213,7 +222,7 @@ public class MonitorService extends Service {
                 .setShowWhen(false)
                 .setPriority(Notification.PRIORITY_MIN)   // без значка в рядку стану, згорнуте внизу шторки
                 .setContentIntent(openApp());
-        if (lastStatusColor != GRAY && lastStatusColor != GREEN) colorize(b, lastStatusColor);   // фарбуємо лише під час тривоги
+        if (lastStatusColor != GRAY && lastStatusColor != GREEN) colorize(b, lastStatusColor);   // жовтий/червоний/фіолетовий   // фарбуємо лише під час тривоги
         return b.build();
     }
 
