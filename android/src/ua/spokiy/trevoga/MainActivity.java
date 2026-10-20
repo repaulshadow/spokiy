@@ -220,6 +220,25 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         });
         LinearLayout.LayoutParams bl = matchWrap(dp(12));
         notif.addView(batt, bl);
+        if (Build.VERSION.SDK_INT >= 26) {
+            // Android вимагає постійне сповіщення для роботи у фоні; його можна сховати в налаштуваннях каналу
+            View hide = button("Сховати постійне сповіщення", false, new View.OnClickListener() {
+                public void onClick(View v) {
+                    try {
+                        startActivity(new Intent("android.settings.CHANNEL_NOTIFICATION_SETTINGS")
+                                .putExtra("android.provider.extra.APP_PACKAGE", getPackageName())
+                                .putExtra("android.provider.extra.CHANNEL_ID", Prefs.CH_STATUS));
+                    } catch (Exception e) {
+                        try {
+                            startActivity(new Intent("android.settings.APP_NOTIFICATION_SETTINGS")
+                                    .putExtra("android.provider.extra.APP_PACKAGE", getPackageName()));
+                        } catch (Exception ignored) { }
+                    }
+                }
+            });
+            notif.addView(hide, matchWrap(dp(8)));
+            notif.addView(text("Вимкніть «Фонова робота» — стеження продовжить працювати, а сповіщення прийдуть лише при тривозі й відбої.", 12, MUTED, false));
+        }
         root.addView(notif, matchWrap(dp(12)));
 
         // ---------- кнопки ----------

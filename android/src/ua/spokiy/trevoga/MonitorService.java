@@ -178,7 +178,8 @@ public class MonitorService extends Service {
         lastStatusColor = state == AlertSource.ALERT
                 ? (parseList(Prefs.get(this).getString(Prefs.THREATS, "")).contains("ballistic_missiles") ? DARK_RED : RED)
                 : state == AlertSource.CLEAR ? GREEN : GRAY;
-        lastStatusTitle = state == AlertSource.ALERT ? "ПОВІТРЯНА ТРИВОГА" : state == AlertSource.CLEAR ? "Тривоги немає" : "Тривога: стежу";
+        lastStatusTitle = state == AlertSource.ALERT ? "ПОВІТРЯНА ТРИВОГА" : "Тривога: стежу";
+        if (state != AlertSource.ALERT) text = error ? "Немає зв'язку" : region;
         ((NotificationManager) getSystemService(NOTIFICATION_SERVICE))
                 .notify(NOTIF_STATUS, statusNotification(text));
     }
@@ -209,9 +210,10 @@ public class MonitorService extends Service {
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setOngoing(true)
-                .setPriority(Notification.PRIORITY_LOW)
+                .setShowWhen(false)
+                .setPriority(Notification.PRIORITY_MIN)   // без значка в рядку стану, згорнуте внизу шторки
                 .setContentIntent(openApp());
-        colorize(b, lastStatusColor);
+        if (lastStatusColor != GRAY && lastStatusColor != GREEN) colorize(b, lastStatusColor);   // фарбуємо лише під час тривоги
         return b.build();
     }
 

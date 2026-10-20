@@ -16,7 +16,7 @@ final class Prefs {
             STATE = "state", STATUS_TIME = "status_time", ERROR = "error", SOURCE = "source",
             ASKED_BATTERY = "asked_battery";
 
-    static final String CH_STATUS = "status", CH_ALERT = "alert_v1";
+    static final String CH_STATUS = "status_v2", CH_ALERT = "alert_v1";
 
     static SharedPreferences get(Context c) {
         return c.getSharedPreferences(NAME, Context.MODE_PRIVATE);
@@ -43,7 +43,7 @@ final class Prefs {
             NotificationManager nm = (NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE);
             Class<?> chCls = Class.forName("android.app.NotificationChannel");
             Object st = chCls.getConstructor(String.class, CharSequence.class, int.class)
-                    .newInstance(CH_STATUS, "Статус стеження", 2 /* IMPORTANCE_LOW */);
+                    .newInstance(CH_STATUS, "Фонова робота (можна вимкнути)", 1 /* IMPORTANCE_MIN */);
             Object al = chCls.getConstructor(String.class, CharSequence.class, int.class)
                     .newInstance(CH_ALERT, "Тривога і відбій", 4 /* IMPORTANCE_HIGH */);
             chCls.getMethod("setSound", android.net.Uri.class, android.media.AudioAttributes.class)
@@ -51,6 +51,9 @@ final class Prefs {
             chCls.getMethod("enableVibration", boolean.class).invoke(al, false);
             NotificationManager.class.getMethod("createNotificationChannel", chCls).invoke(nm, st);
             NotificationManager.class.getMethod("createNotificationChannel", chCls).invoke(nm, al);
+            // старий канал постійного сповіщення (до 2.8) — прибираємо
+            try { NotificationManager.class.getMethod("deleteNotificationChannel", String.class).invoke(nm, "status"); }
+            catch (Throwable ignored) { }
         } catch (Throwable ignored) { }
     }
 
