@@ -21,11 +21,11 @@ jobs:
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v5
         with:
-          node-version: 20
+          node-version: 22
 
       - name: Check secrets
         env:
@@ -40,7 +40,10 @@ jobs:
           fi
 
       - name: Deploy worker
-        run: npx --yes wrangler@4.145.0 deploy | tee deploy.log
+        run: |
+          npx --yes wrangler@4.145.0 deploy 2>&1 | tee deploy.log
+          # коротко показываем итог выкладки в аннотациях запуска
+          echo "::notice title=wrangler deploy::$(grep -vE '^\s*$' deploy.log | tail -n 12 | tr '\n' ' ' | cut -c1-900)"
 
       - name: Set alerts.in.ua token
         env:
@@ -51,10 +54,18 @@ jobs:
 
       - name: Save server address to config.json
         run: |
-          url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' deploy.log | head -1)
+          url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' deploy.log | head -1 || true)
           if [ -z "$url" ]; then
-            echo "::warning::Не удалось найти адрес сервера в выводе wrangler. Впишите его в config.json вручную."
-            exit 0
+            # спрашиваем поддомен workers.dev напрямую у Cloudflare
+            acc=$(grep -oE '^account_id *= *"[0-9a-f]+"' wrangler.toml | grep -oE '[0-9a-f]{32}')
+            sub=$(curl -s -H "Authorization: Bearer $CLOUDFLARE_API_TOKEN" \
+              "https://api.cloudflare.com/client/v4/accounts/$acc/workers/subdomain" \
+              | python3 -c "import sys,json; d=json.load(sys.stdin); print((d.get('result') or {}).get('subdomain') or '')" || true)
+            if [ -n "$sub" ]; then url="https://trevoga.$sub.workers.dev"; fi
+          fi
+          if [ -z "$url" ]; then
+            echo "::error::Сервер выложен, но у аккаунта Cloudflare нет адреса workers.dev. Откройте dash.cloudflare.com -> Workers & Pages, придумайте поддомен (Set up / Change subdomain) и снова запустите workflow."
+            exit 1
           fi
           echo "Адрес сервера: $url" >> "$GITHUB_STEP_SUMMARY"
           echo "Проверка: $url/health" >> "$GITHUB_STEP_SUMMARY"
