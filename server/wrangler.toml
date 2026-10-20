@@ -2,6 +2,7 @@ name = "trevoga"
 main = "src/index.js"
 compatibility_date = "2025-09-01"
 workers_dev = true
+account_id = "de145c6ba467201b5e0487fccd0a32d0"
 
 [[durable_objects.bindings]]
 name = "ALERTS"

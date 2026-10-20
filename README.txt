@@ -30,23 +30,23 @@ alerts.in.ua  ←(токен, раз в 20 с)—  сервер на Cloudflare 
 2. **Cloudflare** (бесплатно):
    - зарегистрируйтесь на https://dash.cloudflare.com/sign-up;
    - откройте раздел **Workers & Pages** один раз — Cloudflare создаст вам адрес вида `ваше-имя.workers.dev`;
-   - **Account ID** — на странице Workers & Pages справа (или в адресной строке после `dash.cloudflare.com/`);
    - **API-токен**: My Profile → API Tokens → Create Token → шаблон **Edit Cloudflare Workers** → Continue → Create.
 
-3. **GitHub** — в этом репозитории: **Settings → Secrets and variables → Actions → New repository secret**, три секрета:
+3. **GitHub** — в этом репозитории: **Settings → Secrets and variables → Actions → New repository secret**, два секрета:
 
    | Имя | Что вписать |
    | --- | --- |
    | `ALERTS_TOKEN` | токен alerts.in.ua |
    | `CLOUDFLARE_API_TOKEN` | API-токен Cloudflare |
-   | `CLOUDFLARE_ACCOUNT_ID` | Account ID Cloudflare |
-
+   
 4. **Запуск:** вкладка **Actions → Deploy server (Cloudflare) → Run workflow**.
    Через минуту сервер работает, а его адрес сам запишется в `config.json`.
    Проверка: откройте `адрес/health` — должно быть `"ok": true`.
 
 5. **Пересоберите программы** (`build.bat` и `android/build_apk.sh`), чтобы адрес сервера вшился в них.
    Если сделать репозиторий публичным, уже установленные программы подхватят новый адрес сами (в течение 6 часов).
+
+Account ID Cloudflare уже вписан в `server/wrangler.toml`.
 
 Поменять токен: обновите секрет `ALERTS_TOKEN` и снова запустите workflow.
 
