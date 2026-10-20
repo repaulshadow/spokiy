@@ -1,17 +1,20 @@
 // Сервер-посредник для программы «Тривога».
 // Токен alerts.in.ua хранится только здесь (секрет ALERTS_TOKEN), пользователи его не видят.
-// Все запросы приложений сходятся в один Durable Object, который ходит к alerts.in.ua
-// не чаще раза в REFRESH_MS — сколько бы ни было пользователей.
+// Все запросы приложений сходятся в один Durable Object, который ходит к источникам
+// (alerts.in.ua и NEPTUN) не чаще раза в REFRESH_MS — сколько бы ни было пользователей.
 //
 // GET /status  ->  {
 //   ok: true,
 //   updated: "2026-10-20T05:00:00.000Z",     // когда данные взяты у alerts.in.ua
-//   air: "NNNANNP...",                       // символ с индексом uid: A — тревога, P — частичная, N — нет
+//   air: "NNNANNP...",        // або null, якщо alerts.in.ua недоступний                       // символ с индексом uid: A — тревога, P — частичная, N — нет
+//   neptun: { r: [["Одеська область","Одеський район","<since>"]], o: [["АР Крим","<since>"]] },  // або null
+//   src: { alerts_in_ua: "ok" | "немає токена" | "<помилка>", neptun: "ok" | "<помилка>" },
 //   alerts: [ { u: 22, o: 22, r: "Харківський район", s: "2026-10-20T04:10:00.000Z",
 //               t: ["ballistic_missiles", "drones"] }, ... ]   // u — uid місця, o — області, s — початок
 // }
 
 const UPSTREAM_DEFAULT = "https://api.alerts.in.ua";
+const NEPTUN_DEFAULT = "https://neptun.in.ua";
 const REFRESH_MS = 20000;      // 2 запроса к alerts.in.ua раз в 20 с = 6 в минуту (лимит у них 8–10)
 const EDGE_CACHE_S = 10;       // кэш на краю Cloudflare, чтобы не будить Durable Object на каждый запрос
 
@@ -105,6 +108,7 @@ export class AlertsHub {
         ok: !!this.data,
         service: "trevoga",
         token_set: !!this.env.ALERTS_TOKEN,
+        sources: this.sources || null,
         data_age_s: this.data ? Math.round((now - this.okAt) / 1000) : null,
         last_error: this.lastError,
       });
@@ -131,61 +135,91 @@ export class AlertsHub {
         Accept: "application/json",
       },
     });
-    if (r.status === 401) throw new Error("alerts.in.ua: неверный токен (401)");
-    if (r.status === 429) throw new Error("alerts.in.ua: слишком частые запросы (429)");
-    if (!r.ok) throw new Error("alerts.in.ua: ответ " + r.status);
+    if (r.status === 401) throw new Error("alerts.in.ua: невірний токен (401)");
+    if (r.status === 429) throw new Error("alerts.in.ua: забагато запитів (429)");
+    if (!r.ok) throw new Error("alerts.in.ua: відповідь " + r.status);
     return r.text();
   }
 
-  async refresh() {
-    if (!this.env.ALERTS_TOKEN) {
-      this.lastError = "на сервере не задан ALERTS_TOKEN";
-      return;
-    }
-    try {
-      const [airRaw, activeRaw] = await Promise.all([
-        this.upstream("/v1/iot/active_air_raid_alerts.json"),
-        this.upstream("/v1/alerts/active.json"),
-      ]);
-      let air = airRaw.trim();
-      if (air.startsWith('"')) air = JSON.parse(air);       // ответ — JSON-строка в кавычках
-      if (typeof air !== "string" || air.length < 32) throw new Error("неожиданный формат статусов");
+  // Джерело 1: alerts.in.ua (потрібен токен) — статуси всіх місць + типи загроз
+  async fromAlertsInUa() {
+    if (!this.env.ALERTS_TOKEN) throw new Error("немає токена");
+    const [airRaw, activeRaw] = await Promise.all([
+      this.upstream("/v1/iot/active_air_raid_alerts.json"),
+      this.upstream("/v1/alerts/active.json"),
+    ]);
+    let air = airRaw.trim();
+    if (air.startsWith('"')) air = JSON.parse(air);       // відповідь — JSON-рядок у лапках
+    if (typeof air !== "string" || air.length < 32) throw new Error("alerts.in.ua: неочікуваний формат");
 
-      const active = JSON.parse(activeRaw);
-      const alerts = [];
-      for (const a of active.alerts || []) {
-        if (a.finished_at) continue;
-        const t = [];
-        if (a.alert_type && a.alert_type !== "air_raid") t.push(a.alert_type);
-        for (const th of a.threats || []) {
-          if (th && th.threat_type && !t.includes(th.threat_type)) t.push(th.threat_type);
-        }
-        alerts.push({
-          u: toInt(a.location_uid),
-          o: toInt(a.location_oblast_uid),
-          r: a.location_raion || null,
-          s: a.started_at || null,
-          t,
-        });
+    const active = JSON.parse(activeRaw);
+    const alerts = [];
+    for (const a of active.alerts || []) {
+      if (a.finished_at) continue;
+      const t = [];
+      if (a.alert_type && a.alert_type !== "air_raid") t.push(a.alert_type);
+      for (const th of a.threats || []) {
+        if (th && th.threat_type && !t.includes(th.threat_type)) t.push(th.threat_type);
       }
-
-      this.data = JSON.stringify({
-        ok: true,
-        updated: new Date().toISOString(),
-        air,
-        alerts,
+      alerts.push({
+        u: toInt(a.location_uid),
+        o: toInt(a.location_oblast_uid),
+        r: a.location_raion || null,
+        s: a.started_at || null,
+        t,
       });
-      this.fetchedAt = Date.now();
-      this.okAt = this.fetchedAt;
-      this.lastError = null;
-      await this.save();
-    } catch (e) {
-      this.lastError = String(e && e.message ? e.message : e);
-      // если старые данные есть и им меньше 2 минут — отдаём их, иначе ошибку
+    }
+    return { air, alerts };
+  }
+
+  // Джерело 2: NEPTUN (neptun.in.ua, без ключа; їхнє джерело тривог — офіційний API UkraineAlarm).
+  // Умова використання: видиме посилання на NEPTUN у програмах.
+  async fromNeptun() {
+    const base = this.env.NEPTUN || NEPTUN_DEFAULT;
+    const r = await fetch(base + "/api/v1/alerts", {
+      headers: { "User-Agent": "Trevoga/1.0 (+https://github.com/repaulshadow/spokiy)", Accept: "application/json" },
+    });
+    if (!r.ok) throw new Error("NEPTUN: відповідь " + r.status);
+    const j = await r.json();
+    const raions = Array.isArray(j.raions) ? j.raions : [];
+    const oblasts = Array.isArray(j.oblasts) ? j.oblasts : [];
+    if (!Array.isArray(j.raions) && !Array.isArray(j.oblasts)) throw new Error("NEPTUN: неочікуваний формат");
+    return {
+      // [область, район, початок]
+      r: raions.map((x) => [x.oblast || "", x.name || "", x.since || null]),
+      // [область, початок]
+      o: oblasts.map((x) => [x.name || "", x.since || null]),
+    };
+  }
+
+  async refresh() {
+    const [ain, nep] = await Promise.allSettled([this.fromAlertsInUa(), this.fromNeptun()]);
+    const errMsg = (x) => String(x && x.reason && x.reason.message ? x.reason.message : x && x.reason);
+    const src = {
+      alerts_in_ua: ain.status === "fulfilled" ? "ok" : errMsg(ain),
+      neptun: nep.status === "fulfilled" ? "ok" : errMsg(nep),
+    };
+    this.sources = src;
+    if (ain.status !== "fulfilled" && nep.status !== "fulfilled") {
+      this.lastError = "alerts.in.ua: " + src.alerts_in_ua + "; NEPTUN: " + src.neptun;
+      // якщо старі дані є і їм менше 2 хвилин — віддаємо їх, інакше помилку
       if (this.data && Date.now() - this.okAt > 120000) this.data = null;
-      // следующая попытка — не раньше чем через 10 с
+      // наступна спроба — не раніше ніж через 10 с
       this.fetchedAt = Date.now() - REFRESH_MS + 10000;
       await this.save();
+      return;
     }
+    this.data = JSON.stringify({
+      ok: true,
+      updated: new Date().toISOString(),
+      air: ain.status === "fulfilled" ? ain.value.air : null,
+      alerts: ain.status === "fulfilled" ? ain.value.alerts : [],
+      neptun: nep.status === "fulfilled" ? nep.value : null,
+      src,
+    });
+    this.fetchedAt = Date.now();
+    this.okAt = this.fetchedAt;
+    this.lastError = null;
+    await this.save();
   }
 }
