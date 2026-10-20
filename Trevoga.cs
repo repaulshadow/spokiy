@@ -20,7 +20,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("2.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.4.0.0")]
 
 namespace Trevoga
 {
@@ -45,8 +45,13 @@ namespace Trevoga
             {
                 if (!createdNew)
                 {
-                    MessageBox.Show("Програма вже запущена (значок біля годинника).", "Тривога",
-                        MessageBoxButtons.OK, MessageBoxIcon.Information);
+                    // Друга копія (наприклад, ще один ярлик в автозавантаженні): просимо першу показати вікно і тихо виходимо
+                    bool minimized = false;
+                    foreach (string a in Environment.GetCommandLineArgs())
+                        if (a.Equals("/min", StringComparison.OrdinalIgnoreCase)) minimized = true;
+                    if (!minimized)
+                        try { using (EventWaitHandle ev = EventWaitHandle.OpenExisting(MainForm.ShowEventName)) ev.Set(); }
+                        catch { }
                     return;
                 }
                 Application.EnableVisualStyles();
@@ -1062,6 +1067,8 @@ namespace Trevoga
         int requestId = 0;
 
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
+        public const string ShowEventName = "Trevoga_ShowWindow_Event";
+        EventWaitHandle showEvent;
 
         public MainForm(bool startHidden)
         {
@@ -1157,7 +1164,19 @@ namespace Trevoga
             notif.Controls.Add(chkSound);
 
             chkAutorun = Check("Запускати разом з Windows", 16, 104, IsAutorun());
-            chkAutorun.CheckedChanged += delegate { SetAutorun(chkAutorun.Checked); };
+            chkAutorun.CheckedChanged += delegate
+            {
+                if (loading) return;
+                if (chkAutorun.Checked && RunningFromTemp())
+                {
+                    MessageBox.Show("Програму запущено прямо з архіву. Спершу розпакуйте її в постійну папку " +
+                        "(наприклад C:\\Trevoga) і запустіть звідти — інакше автозапуск не спрацює.", "Тривога",
+                        MessageBoxButtons.OK, MessageBoxIcon.Warning);
+                    loading = true; chkAutorun.Checked = false; loading = false;
+                    return;
+                }
+                if (!SetAutorun(chkAutorun.Checked)) { loading = true; chkAutorun.Checked = IsAutorun(); loading = false; }
+            };
             notif.Controls.Add(chkAutorun);
 
             chkPartial = Check("Сповіщати й про тривогу в окремих громадах", 16, 130, settings.Partial);
@@ -1212,6 +1231,38 @@ namespace Trevoga
             tray.DoubleClick += delegate { ShowWindow(); };
 
             Sounds.Ui = this;
+
+            // Сигнал від другої копії програми: показати вікно
+            try
+            {
+                showEvent = new EventWaitHandle(false, EventResetMode.AutoReset, ShowEventName);
+                Thread w = new Thread(delegate()
+                {
+                    while (true)
+                    {
+                        showEvent.WaitOne();
+                        try { BeginInvoke((MethodInvoker)delegate { ShowWindow(); }); } catch { }
+                    }
+                });
+                w.IsBackground = true;
+                w.Start();
+            }
+            catch { }
+
+            // Автозапуск: переносимо старий запис із реєстру на ярлик і оновлюємо шлях, якщо програму перемістили
+            if (IsAutorun() && !RunningFromTemp())
+            {
+                try { RemoveRunKey(); CreateShortcut(StartupLnk); } catch { }
+            }
+
+            // Запасний варіант для Windows 7: ще раз показати значок через хвилину після запуску
+            if (startHidden)
+            {
+                System.Windows.Forms.Timer re = new System.Windows.Forms.Timer();
+                re.Interval = 60000;
+                re.Tick += delegate { re.Stop(); ReAddTray(); };
+                re.Start();
+            }
 
             timer = new System.Windows.Forms.Timer();
             timer.Interval = settings.Interval * 1000;
@@ -1539,7 +1590,14 @@ namespace Trevoga
             }
         }
 
-        static bool IsAutorun()
+        // ---------- Автозапуск: ярлик у папці «Автозавантаження» (надійніше на Windows 7, ніж реєстр) ----------
+
+        static string StartupLnk
+        {
+            get { return Path.Combine(Environment.GetFolderPath(Environment.SpecialFolder.Startup), "Тривога.lnk"); }
+        }
+
+        static bool HasRunKey()
         {
             try
             {
@@ -1549,21 +1607,92 @@ namespace Trevoga
             catch { return false; }
         }
 
-        static void SetAutorun(bool on)
+        static void RemoveRunKey()
         {
             try
             {
                 using (RegistryKey k = Registry.CurrentUser.OpenSubKey(RunKey, true))
-                {
-                    if (k == null) return;
-                    if (on) k.SetValue("Trevoga", "\"" + Application.ExecutablePath + "\" /min");
-                    else k.DeleteValue("Trevoga", false);
-                }
+                    if (k != null) k.DeleteValue("Trevoga", false);
+            }
+            catch { }
+        }
+
+        static bool IsAutorun()
+        {
+            return File.Exists(StartupLnk) || HasRunKey();
+        }
+
+        static void CreateShortcut(string lnkPath)
+        {
+            Type t = Type.GetTypeFromProgID("WScript.Shell");
+            object shell = Activator.CreateInstance(t);
+            object lnk = null;
+            try
+            {
+                lnk = t.InvokeMember("CreateShortcut", System.Reflection.BindingFlags.InvokeMethod, null, shell, new object[] { lnkPath });
+                Type lt = lnk.GetType();
+                System.Reflection.BindingFlags set = System.Reflection.BindingFlags.SetProperty;
+                lt.InvokeMember("TargetPath", set, null, lnk, new object[] { Application.ExecutablePath });
+                lt.InvokeMember("Arguments", set, null, lnk, new object[] { "/min" });
+                lt.InvokeMember("WorkingDirectory", set, null, lnk, new object[] { Application.StartupPath });
+                lt.InvokeMember("Description", set, null, lnk, new object[] { "Тривога — монітор повітряної тривоги" });
+                lt.InvokeMember("Save", System.Reflection.BindingFlags.InvokeMethod, null, lnk, null);
+            }
+            finally
+            {
+                if (lnk != null) Marshal.ReleaseComObject(lnk);
+                Marshal.ReleaseComObject(shell);
+            }
+        }
+
+        static bool SetAutorun(bool on)
+        {
+            try
+            {
+                RemoveRunKey();                          // старий спосіб (версії до 2.4)
+                if (on) CreateShortcut(StartupLnk);
+                else if (File.Exists(StartupLnk)) File.Delete(StartupLnk);
+                return true;
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Не вдалося змінити автозапуск: " + ex.Message, "Тривога");
+                MessageBox.Show("Не вдалося змінити автозапуск: " + ex.Message +
+                    "\n\nМожна додати ярлик програми в папку «Автозавантаження» вручну.", "Тривога");
+                return false;
             }
+        }
+
+        // Програма запущена прямо з архіву (з тимчасової папки)?
+        static bool RunningFromTemp()
+        {
+            try
+            {
+                string tmp = Path.GetFullPath(Path.GetTempPath()).TrimEnd('\\') + "\\";
+                return (Application.StartupPath.TrimEnd('\\') + "\\").StartsWith(tmp, StringComparison.OrdinalIgnoreCase);
+            }
+            catch { return false; }
+        }
+
+        // ---------- Значок у треї: Windows 7 при вході може запустити програму раніше за панель задач ----------
+
+        [DllImport("user32.dll", CharSet = CharSet.Unicode)]
+        static extern int RegisterWindowMessage(string msg);
+        static readonly int WM_TASKBARCREATED = SafeRegister("TaskbarCreated");
+
+        static int SafeRegister(string name)
+        {
+            try { return RegisterWindowMessage(name); } catch { return -1; }
+        }
+
+        void ReAddTray()
+        {
+            try { tray.Visible = false; tray.Visible = true; } catch { }
+        }
+
+        protected override void WndProc(ref Message m)
+        {
+            if (m.Msg == WM_TASKBARCREATED && tray != null) ReAddTray();   // панель задач (пере)створено
+            base.WndProc(ref m);
         }
     }
 }
