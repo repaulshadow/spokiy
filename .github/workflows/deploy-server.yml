@@ -31,12 +31,12 @@ jobs:
         env:
           ALERTS_TOKEN: ${{ secrets.ALERTS_TOKEN }}
         run: |
-          missing=""
-          [ -n "$CLOUDFLARE_API_TOKEN" ] || missing="$missing CLOUDFLARE_API_TOKEN"
-          [ -n "$ALERTS_TOKEN" ] || missing="$missing ALERTS_TOKEN"
-          if [ -n "$missing" ]; then
-            echo "::error::Не заданы секреты репозитория:$missing (Settings -> Secrets and variables -> Actions)"
+          if [ -z "$CLOUDFLARE_API_TOKEN" ]; then
+            echo "::error::Не задан секрет CLOUDFLARE_API_TOKEN (Settings -> Secrets and variables -> Actions)"
             exit 1
+          fi
+          if [ -z "$ALERTS_TOKEN" ]; then
+            echo "::warning::Секрет ALERTS_TOKEN ещё не задан: сервер будет выложен, но данных о тревогах не будет, пока токен не добавите и не запустите workflow снова."
           fi
 
       - name: Deploy worker
@@ -45,7 +45,9 @@ jobs:
       - name: Set alerts.in.ua token
         env:
           ALERTS_TOKEN: ${{ secrets.ALERTS_TOKEN }}
-        run: printf '%s' "$ALERTS_TOKEN" | npx --yes wrangler@4.145.0 secret put ALERTS_TOKEN
+        run: |
+          if [ -z "$ALERTS_TOKEN" ]; then echo "ALERTS_TOKEN не задан — пропускаю"; exit 0; fi
+          printf '%s' "$ALERTS_TOKEN" | npx --yes wrangler@4.145.0 secret put ALERTS_TOKEN
 
       - name: Save server address to config.json
         run: |
