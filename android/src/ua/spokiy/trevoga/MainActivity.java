@@ -42,6 +42,8 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     static final int RED = 0xFFDC2626, DARK_RED = 0xFF991B1B, GREEN = 0xFF16A34A, GRAY = 0xFF6B7280;
 
     private SharedPreferences prefs;
+    private LinearLayout home, settings;
+    private ScrollView scroll;
     private LinearLayout statusCard;
     private TextView title, place, detail, footer, soundInfo;
     private FlowLayout chips;
@@ -64,6 +66,29 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         root.setOrientation(LinearLayout.VERTICAL);
         root.setPadding(dp(16), dp(16), dp(16), dp(24));
         scroll.addView(root);
+        this.scroll = scroll;
+
+        // Два екрани: головний (статус) і налаштування (усе інше, разом із тестами)
+        home = new LinearLayout(this);
+        home.setOrientation(LinearLayout.VERTICAL);
+        settings = new LinearLayout(this);
+        settings.setOrientation(LinearLayout.VERTICAL);
+        settings.setVisibility(View.GONE);
+        root.addView(home);
+        root.addView(settings);
+
+        LinearLayout head = row();
+        head.setGravity(Gravity.CENTER_VERTICAL);
+        TextView back = text("‹  Назад", 16, TEXT, true);
+        back.setPadding(dp(4), dp(10), dp(16), dp(10));
+        back.setClickable(true);
+        back.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { showSettings(false); }
+        });
+        head.addView(back);
+        TextView st = text("Налаштування", 20, TEXT, true);
+        head.addView(st);
+        settings.addView(head);
 
         // ---------- картка статусу ----------
         statusCard = new LinearLayout(this);
@@ -82,7 +107,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         statusCard.addView(place);
         statusCard.addView(detail);
         statusCard.addView(chips);
-        root.addView(statusCard, matchWrap(0));
+        home.addView(statusCard, matchWrap(0));
 
         // ---------- стеження ----------
         LinearLayout watch = card(null);
@@ -103,7 +128,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             }
         });
         watch.addView(enabledSwitch);
-        root.addView(watch, matchWrap(dp(12)));
+        settings.addView(watch, matchWrap(dp(8)));
 
         // ---------- місце ----------
         LinearLayout where = card("Місце");
@@ -155,7 +180,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             }
         });
         where.addView(partial);
-        root.addView(where, matchWrap(dp(12)));
+        settings.addView(where, matchWrap(dp(12)));
 
         // ---------- сповіщення ----------
         LinearLayout notif = card("Сповіщення");
@@ -239,7 +264,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             notif.addView(hide, matchWrap(dp(8)));
             notif.addView(text("Вимкніть «Фонова робота» — стеження продовжить працювати, а сповіщення прийдуть лише при тривозі й відбої.", 12, MUTED, false));
         }
-        root.addView(notif, matchWrap(dp(12)));
+        settings.addView(notif, matchWrap(dp(12)));
 
         // ---------- кнопки ----------
         LinearLayout row = row();
@@ -260,14 +285,27 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
                 MonitorService.showAlert(MainActivity.this, "Відбій тривоги (тест)", Prefs.place(MainActivity.this), MonitorService.GREEN, q);
             }
         }), weight(dp(8)));
-        row.addView(button("Тиша", true, new View.OnClickListener() {
+        TextView testsLabel = fieldLabel("ПЕРЕВІРКА ЗВУКУ І СПОВІЩЕНЬ");
+        testsLabel.setPadding(dp(4), dp(18), 0, dp(6));
+        settings.addView(testsLabel);
+        settings.addView(row, matchWrap(0));
+
+        // ---------- головний екран: кнопки ----------
+        LinearLayout homeRow = row();
+        homeRow.addView(button("⚙  Налаштування і тести", false, new View.OnClickListener() {
+            public void onClick(View v) { showSettings(true); }
+        }), new LinearLayout.LayoutParams(0, dp(52), 2f));
+        View hush = button("Тиша", true, new View.OnClickListener() {
             public void onClick(View v) { Sounds.stop(); }
-        }), weight(dp(8)));
-        root.addView(row, matchWrap(dp(16)));
+        });
+        LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(0, dp(52), 1f);
+        hl.leftMargin = dp(8);
+        homeRow.addView(hush, hl);
+        home.addView(homeRow, matchWrap(dp(16)));
 
         footer = text("", 12, MUTED, false);
         footer.setPadding(dp(4), dp(14), dp(4), 0);
-        root.addView(footer);
+        home.addView(footer);
 
         // Обов'язкове посилання на NEPTUN (умова використання їхніх даних)
         TextView credit = text("", 12, MUTED, false);
@@ -275,7 +313,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         credit.setText(android.text.Html.fromHtml("Дані: alerts.in.ua · <a href=\"https://neptun.in.ua/\">Карта повітряних тривог — NEPTUN</a>"));
         credit.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
         credit.setLinkTextColor(TEXT);
-        root.addView(credit);
+        home.addView(credit);
 
         setContentView(scroll);
 
@@ -398,6 +436,18 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     }
 
     // ---------- логіка ----------
+
+    private void showSettings(boolean on) {
+        settings.setVisibility(on ? View.VISIBLE : View.GONE);
+        home.setVisibility(on ? View.GONE : View.VISIBLE);
+        scroll.scrollTo(0, 0);
+    }
+
+    @Override
+    public void onBackPressed() {
+        if (settings.getVisibility() == View.VISIBLE) showSettings(false);
+        else super.onBackPressed();
+    }
 
     private void fillRaions() {
         raionUids.clear();
