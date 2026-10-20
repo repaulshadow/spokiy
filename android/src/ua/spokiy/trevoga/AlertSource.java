@@ -228,6 +228,7 @@ final class AlertSource {
             if (x == null) continue;
             JSONArray e = new JSONArray();
             e.put(x.optString("oblast", "")); e.put(x.optString("name", "")); e.put(x.optString("since", ""));
+            e.put(x.optString("level", "").toLowerCase(Locale.ROOT));
             r.put(e);
         }
         if (os != null) for (int i = 0; i < os.length(); i++) {
@@ -235,6 +236,7 @@ final class AlertSource {
             if (x == null) continue;
             JSONArray e = new JSONArray();
             e.put(x.optString("name", "")); e.put(x.optString("since", ""));
+            e.put(x.optString("level", "").toLowerCase(Locale.ROOT));
             o.put(e);
         }
         JSONObject nep = new JSONObject();
@@ -264,6 +266,17 @@ final class AlertSource {
         return fromRoot(new JSONObject(download(server + "/status")), region, raion, partial);
     }
 
+    private static int sev(String lv) { return "red".equals(lv) ? 2 : "yellow".equals(lv) ? 1 : 0; }
+    private static String maxLevel(String a, String b) { return sev(b) > sev(a) ? b : a; }
+
+    private static void addTypes(List<String> dst, JSONArray t) {
+        if (t == null) return;
+        for (int j = 0; j < t.length(); j++) {
+            String ts = t.optString(j, "");
+            if (ts.length() > 0 && !dst.contains(ts)) dst.add(ts);
+        }
+    }
+
     static Result fromRoot(JSONObject root, String region, int raion, boolean partial) throws Exception {
         int obl = Locations.oblastUid(region);
         if (obl < 0) throw new Exception("невідома область");
@@ -272,10 +285,13 @@ final class AlertSource {
         if (air == null && nep == null) throw new Exception("сервер без даних");
 
         String raionName = raion != 0 ? raionName(raion) : null;
+        String oblN = norm(region), raionN = norm(raionName);
         Result r = new Result();
         int ain = UNKNOWN, nepState = UNKNOWN;
         long ainSince = 0, nepSince = 0;
-        String ainLevel = "";
+        String ainLevel = "", nepLevel = "";
+        List<String> ainThreats = new ArrayList<String>(), nepThreats = new ArrayList<String>();
+        boolean ainPartial = false;   // alerts.in.ua: тривога лише в частині району/області
 
         // --- Джерело 1: alerts.in.ua
         if (air != null) {
@@ -283,7 +299,7 @@ final class AlertSource {
                 char o = charAt(air, obl);
                 char c = raion != 0 ? charAt(air, raion) : o;
                 if (o == 'A' || c == 'A') ain = ALERT;
-                else if (c == 'P') ain = partial ? ALERT : CLEAR;
+                else if (c == 'P') { ain = partial ? ALERT : CLEAR; ainPartial = true; }
                 else if (c == 'N') ain = CLEAR;
                 JSONArray arr = root.optJSONArray("alerts");
                 if (arr != null) for (int i = 0; i < arr.length(); i++) {
@@ -291,30 +307,23 @@ final class AlertSource {
                     if (a == null) continue;
                     int u = toInt(a.opt("u"));
                     int ao = toInt(a.opt("o"));
-                    if (ao != obl && u != obl) continue;
-                    if (raion != 0 && u != obl && u != raion) {
-                        String rn = a.isNull("r") ? null : a.optString("r", null);
-                        if (rn == null || !rn.equals(raionName)) continue;
-                    }
-                    if (raion == 0 && u != obl && !(partial || o == 'A')) continue;   // лише частина області
+                    String on = a.isNull("on") ? null : a.optString("on", null);
+                    String rn = a.isNull("r") ? null : a.optString("r", null);
+                    // у районних тривог alerts.in.ua код області буває некоректним — звіряємо ще й за назвою
+                    boolean inObl = u == obl || ao == obl || (on != null && norm(on).equals(oblN));
+                    if (!inObl) continue;
+                    if (raion != 0 && u != obl && u != raion && (rn == null || !norm(rn).equals(raionN))) continue;
                     if (!a.isNull("s")) ainSince = earliest(ainSince, parseIso(a.optString("s", "")));
-                    String lv = a.isNull("l") ? "" : a.optString("l", "");
-                    if (lv.equals("red")) ainLevel = "red";
-                    else if (lv.equals("yellow") && !ainLevel.equals("red")) ainLevel = "yellow";
-                    JSONArray t = a.optJSONArray("t");
-                    if (t != null) for (int j = 0; j < t.length(); j++) {
-                        String ts = t.optString(j, "");
-                        if (ts.length() > 0 && !r.threats.contains(ts)) r.threats.add(ts);
-                    }
+                    if (!a.isNull("l")) ainLevel = maxLevel(ainLevel, a.optString("l", ""));
+                    addTypes(ainThreats, a.optJSONArray("t"));
                 }
             } catch (Exception e) {
                 ain = UNKNOWN;
             }
         }
 
-        // --- Джерело 2: NEPTUN (офіційні тривоги UkraineAlarm по районах)
+        // --- Джерело 2: NEPTUN (офіційні тривоги UkraineAlarm по районах, з рівнем)
         if (nep != null) {
-            String oblN = norm(region), raionN = norm(raionName);
             boolean oblWide = false, raionHit = false;
             int alertedInObl = 0;
             JSONArray os = nep.optJSONArray("o");
@@ -323,6 +332,8 @@ final class AlertSource {
                 if (e == null || !norm(e.optString(0, "")).equals(oblN)) continue;
                 oblWide = true;
                 nepSince = earliest(nepSince, parseIso(e.optString(1, "")));
+                nepLevel = maxLevel(nepLevel, e.optString(2, ""));
+                addTypes(nepThreats, e.optJSONArray(3));
             }
             JSONArray rs = nep.optJSONArray("r");
             if (rs != null) for (int i = 0; i < rs.length(); i++) {
@@ -331,7 +342,11 @@ final class AlertSource {
                 alertedInObl++;
                 boolean mine = raion != 0 && norm(e.optString(1, "")).equals(raionN);
                 if (mine) raionHit = true;
-                if (mine || raion == 0) nepSince = earliest(nepSince, parseIso(e.optString(2, "")));
+                if (mine || raion == 0) {
+                    nepSince = earliest(nepSince, parseIso(e.optString(2, "")));
+                    nepLevel = maxLevel(nepLevel, e.optString(3, ""));
+                    addTypes(nepThreats, e.optJSONArray(4));
+                }
             }
             int raionsInObl = 0;
             for (int i = 0; i < Locations.RAION_OBLAST.length; i++) if (Locations.RAION_OBLAST[i] == obl) raionsInObl++;
@@ -344,13 +359,22 @@ final class AlertSource {
 
         // --- Зведення: тривога, якщо її показує хоча б одне джерело
         r.state = (ain == ALERT || nepState == ALERT) ? ALERT : CLEAR;
-        // Рівень: з alerts.in.ua; якщо тривогу бачить лише NEPTUN — рівень невідомий, показуємо червоний
-        if (r.state == ALERT) r.level = ain == ALERT && ainLevel.length() > 0 ? ainLevel : "red";
-        if (ain == ALERT) r.since = earliest(r.since, ainSince);
-        if (nepState == ALERT) r.since = earliest(r.since, nepSince);
+        if (r.state == ALERT) {
+            // Рівень — найвищий серед джерел, що бачать тривогу; якщо невідомий — червоний
+            String lv = "";
+            if (ain == ALERT || ainPartial) lv = maxLevel(lv, ainLevel);
+            if (nepState == ALERT) lv = maxLevel(lv, nepLevel);
+            r.level = lv.length() > 0 ? lv : "red";
+            for (String t : ainThreats) if (!r.threats.contains(t)) r.threats.add(t);
+            if (nepState == ALERT) for (String t : nepThreats) if (!r.threats.contains(t)) r.threats.add(t);
+            if (ain == ALERT || ainPartial) r.since = earliest(r.since, ainSince);
+            if (nepState == ALERT) r.since = earliest(r.since, nepSince);
+        }
         r.source = ain != UNKNOWN && nepState != UNKNOWN ? "alerts.in.ua + NEPTUN" : ain != UNKNOWN ? "alerts.in.ua" : "NEPTUN";
         if (ain != UNKNOWN && nepState != UNKNOWN) {
             if (ain == nepState) r.note = "джерела збігаються";
+            else if (ainPartial && nepState == ALERT)
+                r.note = "alerts.in.ua: тривога в частині " + (raion != 0 ? "району" : "області") + ", NEPTUN: у всьому";
             else {
                 r.note = "джерела розходяться: " + (ain == ALERT ? "тривогу показує лише alerts.in.ua" : "тривогу показує лише NEPTUN");
                 r.disagree = true;

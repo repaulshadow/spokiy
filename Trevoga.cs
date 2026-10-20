@@ -20,7 +20,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("2.7.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.8.0.0")]
 
 namespace Trevoga
 {
@@ -407,18 +407,18 @@ namespace Trevoga
                 {
                     Dictionary<string, object> x = item as Dictionary<string, object>;
                     if (x == null) continue;
-                    object a, b, c;
-                    x.TryGetValue("oblast", out a); x.TryGetValue("name", out b); x.TryGetValue("since", out c);
-                    r.Add(new List<object>(new object[] { a, b, c }));
+                    object a, b, c, d;
+                    x.TryGetValue("oblast", out a); x.TryGetValue("name", out b); x.TryGetValue("since", out c); x.TryGetValue("level", out d);
+                    r.Add(new List<object>(new object[] { a, b, c, d != null ? Convert.ToString(d).ToLowerInvariant() : null }));
                 }
             if (os != null)
                 foreach (object item in os)
                 {
                     Dictionary<string, object> x = item as Dictionary<string, object>;
                     if (x == null) continue;
-                    object b, c;
-                    x.TryGetValue("name", out b); x.TryGetValue("since", out c);
-                    o.Add(new List<object>(new object[] { b, c }));
+                    object b, c, d;
+                    x.TryGetValue("name", out b); x.TryGetValue("since", out c); x.TryGetValue("level", out d);
+                    o.Add(new List<object>(new object[] { b, c, d != null ? Convert.ToString(d).ToLowerInvariant() : null }));
                 }
             Dictionary<string, object> nep = new Dictionary<string, object>();
             nep["r"] = r;
@@ -463,6 +463,20 @@ namespace Trevoga
             return FromRoot(s, root);
         }
 
+        static int Sev(string lv) { return lv == "red" ? 2 : lv == "yellow" ? 1 : 0; }
+        static string MaxLevel(string a, string b) { return Sev(b) > Sev(a) ? b : a; }
+
+        static void AddTypes(List<string> dst, object list)
+        {
+            List<object> l = list as List<object>;
+            if (l == null) return;
+            foreach (object t in l)
+            {
+                string ts = Convert.ToString(t);
+                if (!string.IsNullOrEmpty(ts) && !dst.Contains(ts)) dst.Add(ts);
+            }
+        }
+
         static CheckResult FromRoot(Settings s, Dictionary<string, object> root)
         {
             int obl = OblastUid(s.Region);
@@ -473,10 +487,13 @@ namespace Trevoga
             if (air == null && nep == null) throw new Exception("сервер без даних");
 
             string raionName = s.Raion != 0 ? RaionName(s.Raion) : null;
+            string oblN = Norm(s.Region), raionN = Norm(raionName);
             CheckResult r = new CheckResult();
             AlertState ain = AlertState.Unknown, nepState = AlertState.Unknown;
             CheckResult ainRes = new CheckResult(), nepRes = new CheckResult();
-            string ainLevel = "";
+            string ainLevel = "", nepLevel = "";
+            List<string> ainThreats = new List<string>(), nepThreats = new List<string>();
+            bool ainPartial = false;      // alerts.in.ua: тривога лише в частині району/області
 
             // --- Джерело 1: alerts.in.ua
             if (air != null)
@@ -486,7 +503,7 @@ namespace Trevoga
                     char o = CharAt(air, obl);
                     char c = s.Raion != 0 ? CharAt(air, s.Raion) : o;
                     if (o == 'A' || c == 'A') ain = AlertState.Alert;
-                    else if (c == 'P') ain = s.Partial ? AlertState.Alert : AlertState.Clear;
+                    else if (c == 'P') { ain = s.Partial ? AlertState.Alert : AlertState.Clear; ainPartial = true; }
                     else if (c == 'N') ain = AlertState.Clear;
 
                     if (root.TryGetValue("alerts", out v) && v is List<object>)
@@ -498,38 +515,28 @@ namespace Trevoga
                             object x;
                             int u = a.TryGetValue("u", out x) ? ToInt(x) : -1;
                             int ao = a.TryGetValue("o", out x) ? ToInt(x) : -1;
-                            if (ao != obl && u != obl) continue;
-                            if (s.Raion != 0 && u != obl && u != s.Raion)
-                            {
-                                string rn = a.TryGetValue("r", out x) && x != null ? Convert.ToString(x) : null;
-                                if (rn == null || rn != raionName) continue;
-                            }
-                            if (s.Raion == 0 && u != obl && !(s.Partial || o == 'A')) continue;   // лише частина області
+                            string on = a.TryGetValue("on", out x) && x != null ? Convert.ToString(x) : null;
+                            string rn = a.TryGetValue("r", out x) && x != null ? Convert.ToString(x) : null;
+                            // у районних тривог alerts.in.ua код області буває некоректним — звіряємо ще й за назвою
+                            bool inObl = u == obl || ao == obl || (on != null && Norm(on) == oblN);
+                            if (!inObl) continue;
+                            if (s.Raion != 0 && u != obl && u != s.Raion && (rn == null || Norm(rn) != raionN)) continue;
                             if (a.TryGetValue("s", out x)) Earliest(ainRes, ParseIso(x));
-                            if (a.TryGetValue("l", out x) && x != null)
-                            {
-                                string lv = Convert.ToString(x);
-                                if (lv == "red") ainLevel = "red";
-                                else if (lv == "yellow" && ainLevel != "red") ainLevel = "yellow";
-                            }
-                            if (a.TryGetValue("t", out x) && x is List<object>)
-                                foreach (object t in (List<object>)x)
-                                {
-                                    string ts = Convert.ToString(t);
-                                    if (!string.IsNullOrEmpty(ts) && !r.Threats.Contains(ts)) r.Threats.Add(ts);
-                                }
+                            if (a.TryGetValue("l", out x) && x != null) ainLevel = MaxLevel(ainLevel, Convert.ToString(x));
+                            if (a.TryGetValue("t", out x)) AddTypes(ainThreats, x);
                         }
                     }
                 }
                 catch { ain = AlertState.Unknown; }
             }
 
-            // --- Джерело 2: NEPTUN (офіційні тривоги UkraineAlarm по районах)
+            // --- Джерело 2: NEPTUN (офіційні тривоги UkraineAlarm по районах, з рівнем)
             if (nep != null)
             {
-                string oblN = Norm(s.Region), raionN = Norm(raionName);
                 bool oblWide = false, raionHit = false;
                 int alertedInObl = 0;
+                string anyLevel = "";
+                List<string> anyTypes = new List<string>();
                 if (nep.TryGetValue("o", out v) && v is List<object>)
                     foreach (object item in (List<object>)v)
                     {
@@ -537,6 +544,8 @@ namespace Trevoga
                         if (e == null || e.Count < 1 || Norm(Convert.ToString(e[0])) != oblN) continue;
                         oblWide = true;
                         if (e.Count > 1) Earliest(nepRes, ParseIso(e[1]));
+                        if (e.Count > 2 && e[2] != null) nepLevel = MaxLevel(nepLevel, Convert.ToString(e[2]));
+                        if (e.Count > 3) AddTypes(nepThreats, e[3]);
                     }
                 if (nep.TryGetValue("r", out v) && v is List<object>)
                     foreach (object item in (List<object>)v)
@@ -546,7 +555,15 @@ namespace Trevoga
                         alertedInObl++;
                         bool mine = s.Raion != 0 && Norm(Convert.ToString(e[1])) == raionN;
                         if (mine) raionHit = true;
-                        if ((mine || s.Raion == 0) && e.Count > 2) Earliest(nepRes, ParseIso(e[2]));
+                        string lv = e.Count > 3 && e[3] != null ? Convert.ToString(e[3]) : "";
+                        anyLevel = MaxLevel(anyLevel, lv);
+                        if (e.Count > 4) AddTypes(anyTypes, e[4]);
+                        if (mine || s.Raion == 0)
+                        {
+                            if (e.Count > 2) Earliest(nepRes, ParseIso(e[2]));
+                            nepLevel = MaxLevel(nepLevel, lv);
+                            if (e.Count > 4) AddTypes(nepThreats, e[4]);
+                        }
                     }
                 int raionsInObl = 0;
                 for (int i = 0; i < Locations.RaionOblast.Length; i++) if (Locations.RaionOblast[i] == obl) raionsInObl++;
@@ -559,10 +576,18 @@ namespace Trevoga
 
             // --- Зведення: тривога, якщо її показує хоча б одне джерело
             r.State = (ain == AlertState.Alert || nepState == AlertState.Alert) ? AlertState.Alert : AlertState.Clear;
-            // Рівень: з alerts.in.ua; якщо тривогу бачить лише NEPTUN — рівень невідомий, показуємо червоний
-            if (r.State == AlertState.Alert) r.Level = ain == AlertState.Alert && ainLevel.Length > 0 ? ainLevel : "red";
-            if (ain == AlertState.Alert) Earliest(r, ainRes.Since);
-            if (nepState == AlertState.Alert) Earliest(r, nepRes.Since);
+            if (r.State == AlertState.Alert)
+            {
+                // Рівень — найвищий серед джерел, що бачать тривогу; якщо невідомий — червоний
+                string lv = "";
+                if (ain == AlertState.Alert || ainPartial) lv = MaxLevel(lv, ainLevel);
+                if (nepState == AlertState.Alert) lv = MaxLevel(lv, nepLevel);
+                r.Level = lv.Length > 0 ? lv : "red";
+                foreach (string t in ainThreats) if (!r.Threats.Contains(t)) r.Threats.Add(t);
+                if (nepState == AlertState.Alert) foreach (string t in nepThreats) if (!r.Threats.Contains(t)) r.Threats.Add(t);
+                if (ain == AlertState.Alert || ainPartial) Earliest(r, ainRes.Since);
+                if (nepState == AlertState.Alert) Earliest(r, nepRes.Since);
+            }
 
             List<string> names = new List<string>();
             if (ain != AlertState.Unknown) names.Add("alerts.in.ua");
@@ -571,6 +596,8 @@ namespace Trevoga
             if (ain != AlertState.Unknown && nepState != AlertState.Unknown)
             {
                 if (ain == nepState) r.Note = "джерела збігаються";
+                else if (ainPartial && nepState == AlertState.Alert)
+                    r.Note = "alerts.in.ua: тривога в частині " + (s.Raion != 0 ? "району" : "області") + ", NEPTUN: у всьому";
                 else
                 {
                     r.Note = "джерела розходяться: " + (ain == AlertState.Alert ? "тривогу показує лише alerts.in.ua" : "тривогу показує лише NEPTUN");
