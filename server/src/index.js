@@ -208,13 +208,26 @@ export class AlertsHub {
       const v = x.level ?? x.alertLevel ?? x.alert_level ?? x.threatLevel ?? x.severity ?? x.color ?? null;
       return typeof v === "string" ? v.toLowerCase() : v;
     };
+    // «reasons» (текст, напр. «Дронова загроза (жовтий рівень)») → типи загроз як у alerts.in.ua
+    const types = (x) => {
+      const txt = String(x.reasons || "").toLowerCase();
+      const t = [];
+      if (/баліст/.test(txt)) t.push("ballistic_missiles");
+      if (/крилат/.test(txt)) t.push("cruise_missiles");
+      if (/ракет/.test(txt) && !t.length) t.push("unspecified_missiles");
+      if (/міг|mig/.test(txt)) t.push("mig31k_departure");
+      if (/каб|авіабомб|керован/.test(txt)) t.push("guided_aerial_bombs");
+      if (/дрон|бпла|шахед|безпілот/.test(txt)) t.push("drones");
+      if (/артобстріл|артилер/.test(txt)) t.push("artillery_shelling");
+      return t;
+    };
     this.nepKeys = raions[0] ? Object.keys(raions[0]) : oblasts[0] ? Object.keys(oblasts[0]) : [];
     this.nepSample = raions[0] || oblasts[0] || null;
     return {
-      // [область, район, початок, рівень]
-      r: raions.map((x) => [x.oblast || "", x.name || "", x.since || null, lvl(x)]),
-      // [область, початок, рівень]
-      o: oblasts.map((x) => [x.name || "", x.since || null, lvl(x)]),
+      // [область, район, початок, рівень, типи загроз]
+      r: raions.map((x) => [x.oblast || "", x.name || "", x.since || null, lvl(x), types(x)]),
+      // [область, початок, рівень, типи загроз]
+      o: oblasts.map((x) => [x.name || "", x.since || null, lvl(x), types(x)]),
     };
   }
 
