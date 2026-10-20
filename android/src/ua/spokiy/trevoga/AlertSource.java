@@ -185,12 +185,17 @@ final class AlertSource {
             catch (Exception e) { serverError = e.getMessage(); }
         }
         Result r = fromUbilling(region);
-        List<String> notes = new ArrayList<String>();
-        if (serverError != null) notes.add("сервер недоступний");
-        if (raion != 0) notes.add("район — лише через сервер, стежимо за всією областю");
-        StringBuilder sb = new StringBuilder();
-        for (String n : notes) { if (sb.length() > 0) sb.append(" · "); sb.append(n); }
-        r.note = sb.toString();
+        if (raion != 0) {
+            // Обрано район: дані по всій області сигналу не дають — лише для довідки
+            boolean oblAlert = r.state == ALERT;
+            r.state = UNKNOWN;
+            r.threats.clear();
+            r.since = 0;
+            r.note = (serverError != null || (server != null && server.length() > 0) ? "сервер недоступний" : "сервер ще не налаштовано")
+                    + " · в області зараз " + (oblAlert ? "тривога" : "тиша");
+            return r;
+        }
+        if (serverError != null) r.note = "сервер недоступний";
         return r;
     }
 

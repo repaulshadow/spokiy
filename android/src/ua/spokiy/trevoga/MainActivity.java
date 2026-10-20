@@ -332,6 +332,10 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         return Color.rgb((int) (Color.red(c) * (1 - k)), (int) (Color.green(c) * (1 - k)), (int) (Color.blue(c) * (1 - k)));
     }
 
+    private static String note(SharedPreferences p) {
+        return p.getString(Prefs.NOTE, "");
+    }
+
     private static String ago(long t) {
         long m = (System.currentTimeMillis() - t) / 60000;
         if (m < 1) return "щойно";
@@ -465,6 +469,10 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             title.setText("Тривоги немає");
             detail.setText(cleared > 0 ? "Відбій о " + hm.format(new Date(cleared)) : "Спокійно");
             paintCard(GREEN);
+        } else if (err == null && note(prefs).length() > 0 && Prefs.raion(this) != 0) {
+            title.setText("Немає даних по району");
+            detail.setText(note(prefs));
+            paintCard(GRAY);
         } else {
             title.setText(err != null ? "Немає зв'язку" : "Перевірка…");
             detail.setText(err != null ? err : "");
@@ -476,7 +484,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         String t = prefs.getString(Prefs.STATUS_TIME, null);
         if (on && t != null) f.append("Оновлено о ").append(t).append(" · ").append(prefs.getString(Prefs.SOURCE, ""));
         String note = prefs.getString(Prefs.NOTE, "");
-        if (on && note.length() > 0) f.append(" · ").append(note);
+        if (on && note.length() > 0 && state != AlertSource.UNKNOWN) f.append(" · ").append(note);
         if (on && err != null && state != AlertSource.UNKNOWN) f.append(" · немає зв'язку: ").append(err);
         if (f.length() > 0) f.append("\n\n");
         f.append("Це додатковий сигнал. Тримайте увімкненим і офіційний застосунок «Повітряна тривога».");

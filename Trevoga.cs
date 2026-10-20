@@ -350,10 +350,18 @@ namespace Trevoga
                 catch (Exception ex) { serverError = ex.Message; }
             }
             CheckResult r = FromUbilling(s.Region);
-            List<string> notes = new List<string>();
-            if (serverError != null) notes.Add("сервер недоступний");
-            if (s.Raion != 0) notes.Add("район — лише через сервер, стежимо за всією областю");
-            r.Note = string.Join(" · ", notes.ToArray());
+            if (s.Raion != 0)
+            {
+                // Обрано район: дані по всій області сигналу не дають — лише для довідки
+                bool oblAlert = r.State == AlertState.Alert;
+                r.State = AlertState.Unknown;
+                r.Threats.Clear();
+                r.Since = null;
+                r.Note = (serverError != null || !string.IsNullOrEmpty(server) ? "сервер недоступний" : "сервер ще не налаштовано")
+                    + " · в області зараз " + (oblAlert ? "тривога" : "тиша");
+                return r;
+            }
+            if (serverError != null) r.Note = "сервер недоступний";
             return r;
         }
 
@@ -1336,6 +1344,12 @@ namespace Trevoga
                 card.CardColor = Gfx.Green;
                 card.Detail = clearedAt.HasValue ? "Відбій о " + clearedAt.Value.ToString("HH:mm") : "Спокійно";
             }
+            else if (lastNote.Length > 0 && !lastNote.StartsWith("!") && settings.Raion != 0)
+            {
+                card.Title = "Немає даних по району";
+                card.CardColor = Gfx.Gray;
+                card.Detail = lastNote;
+            }
             else
             {
                 card.Title = lastNote.StartsWith("!") ? "Немає зв'язку" : "Перевірка…";
@@ -1345,7 +1359,7 @@ namespace Trevoga
             card.Invalidate();
 
             string foot = lastTime.Length > 0 ? "Оновлено о " + lastTime + " · " + lastSource : "";
-            if (lastNote.Length > 0 && !lastNote.StartsWith("!")) foot += (foot.Length > 0 ? " · " : "") + lastNote;
+            if (lastNote.Length > 0 && !lastNote.StartsWith("!") && state != AlertState.Unknown) foot += (foot.Length > 0 ? " · " : "") + lastNote;
             if (lastNote.StartsWith("!") && state != AlertState.Unknown) foot += " · немає зв'язку: " + lastNote.Substring(1);
             lblFooter.Text = (foot.Length > 0 ? foot + "\n" : "") + "Хрестик ховає програму до годинника. Вихід — правою кнопкою на значку.";
 
