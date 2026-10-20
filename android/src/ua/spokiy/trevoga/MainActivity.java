@@ -6,36 +6,49 @@ import android.content.Context;
 import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.content.res.ColorStateList;
 import android.graphics.Color;
 import android.graphics.Typeface;
+import android.graphics.drawable.Drawable;
+import android.graphics.drawable.GradientDrawable;
+import android.graphics.drawable.RippleDrawable;
 import android.net.Uri;
 import android.os.Build;
 import android.os.Bundle;
+import android.os.Handler;
 import android.os.PowerManager;
-import android.text.InputType;
 import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.Window;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
-import android.widget.Button;
-import android.widget.CheckBox;
 import android.widget.CompoundButton;
-import android.widget.EditText;
 import android.widget.LinearLayout;
 import android.widget.ScrollView;
 import android.widget.Spinner;
+import android.widget.Switch;
 import android.widget.TextView;
 
+import java.text.SimpleDateFormat;
+import java.util.ArrayList;
+import java.util.Date;
 import java.util.List;
+import java.util.Locale;
 
 public class MainActivity extends Activity implements SharedPreferences.OnSharedPreferenceChangeListener {
-    private TextView status, info, threatsView;
-    private Button toggle;
+    // Кольори
+    static final int BG = 0xFFF3F4F6, TEXT = 0xFF111827, MUTED = 0xFF6B7280, LINE = 0xFFE5E7EB;
+    static final int RED = 0xFFDC2626, DARK_RED = 0xFF991B1B, GREEN = 0xFF16A34A, GRAY = 0xFF6B7280;
+
     private SharedPreferences prefs;
+    private LinearLayout statusCard;
+    private TextView title, place, detail, footer, soundInfo;
+    private FlowLayout chips;
     private Spinner raionSpinner;
-    private TextView soundInfo;
-    private final java.util.ArrayList<Integer> raionUids = new java.util.ArrayList<Integer>();
+    private Switch enabledSwitch;
+    private final List<Integer> raionUids = new ArrayList<Integer>();
+    private final Handler ticker = new Handler();
     private static final int PICK_ALARM = 11, PICK_CLEAR = 12;
 
     @Override
@@ -44,23 +57,59 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         prefs = Prefs.get(this);
         Prefs.createChannels(this);
 
-        int pad = dp(16);
         ScrollView scroll = new ScrollView(this);
+        scroll.setBackgroundColor(BG);
+        scroll.setFillViewport(true);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(pad, pad, pad, pad);
+        root.setPadding(dp(16), dp(16), dp(16), dp(24));
         scroll.addView(root);
 
-        TextView title = new TextView(this);
-        title.setText("Повітряна тривога");
-        title.setTextSize(22);
-        title.setTypeface(Typeface.DEFAULT_BOLD);
-        root.addView(title);
+        // ---------- картка статусу ----------
+        statusCard = new LinearLayout(this);
+        statusCard.setOrientation(LinearLayout.VERTICAL);
+        statusCard.setPadding(dp(22), dp(22), dp(22), dp(22));
+        statusCard.setMinimumHeight(dp(190));
+        statusCard.setElevation(dp(3));
+        title = text("", 28, Color.WHITE, true);
+        place = text("", 16, 0xE6FFFFFF, false);
+        place.setPadding(0, dp(6), 0, 0);
+        detail = text("", 14, 0xD9FFFFFF, false);
+        detail.setPadding(0, dp(2), 0, 0);
+        chips = new FlowLayout(this, dp(8));
+        chips.setPadding(0, dp(16), 0, 0);
+        statusCard.addView(title);
+        statusCard.addView(place);
+        statusCard.addView(detail);
+        statusCard.addView(chips);
+        root.addView(statusCard, matchWrap(0));
 
-        root.addView(label("Область:"));
+        // ---------- стеження ----------
+        LinearLayout watch = card(null);
+        enabledSwitch = new Switch(this);
+        enabledSwitch.setText("Стежити за тривогою");
+        enabledSwitch.setTextSize(16);
+        enabledSwitch.setTextColor(TEXT);
+        enabledSwitch.setChecked(prefs.getBoolean(Prefs.ENABLED, true));
+        enabledSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(CompoundButton c, boolean on) {
+                prefs.edit().putBoolean(Prefs.ENABLED, on).apply();
+                if (on) MonitorService.start(MainActivity.this);
+                else {
+                    stopService(new Intent(MainActivity.this, MonitorService.class));
+                    prefs.edit().putInt(Prefs.STATE, AlertSource.UNKNOWN).apply();
+                }
+                refresh();
+            }
+        });
+        watch.addView(enabledSwitch);
+        root.addView(watch, matchWrap(dp(12)));
+
+        // ---------- місце ----------
+        LinearLayout where = card("Місце");
+        where.addView(fieldLabel("Область"));
         final Spinner spinner = new Spinner(this);
-        ArrayAdapter<String> ad = new ArrayAdapter<String>(this,
-                android.R.layout.simple_spinner_item, AlertSource.REGIONS);
+        ArrayAdapter<String> ad = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, AlertSource.REGIONS);
         ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinner.setAdapter(ad);
         int idx = AlertSource.indexOf(Prefs.region(this));
@@ -77,9 +126,8 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             }
             public void onNothingSelected(AdapterView<?> p) { }
         });
-        root.addView(spinner);
-
-        root.addView(label("Район:"));
+        where.addView(spinner);
+        where.addView(fieldLabel("Район"));
         raionSpinner = new Spinner(this);
         raionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
             public void onItemSelected(AdapterView<?> p, View v, int pos, long id) {
@@ -92,70 +140,30 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             }
             public void onNothingSelected(AdapterView<?> p) { }
         });
-        root.addView(raionSpinner);
+        where.addView(raionSpinner);
         fillRaions();
-
-        status = new TextView(this);
-        status.setTextSize(26);
-        status.setTypeface(Typeface.DEFAULT_BOLD);
-        status.setTextColor(Color.WHITE);
-        status.setGravity(Gravity.CENTER);
-        status.setPadding(pad, dp(28), pad, dp(28));
-        LinearLayout.LayoutParams sp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
-                ViewGroup.LayoutParams.WRAP_CONTENT);
-        sp.topMargin = dp(16);
-        root.addView(status, sp);
-
-        threatsView = new TextView(this);
-        threatsView.setTextSize(18);
-        threatsView.setTypeface(Typeface.DEFAULT_BOLD);
-        threatsView.setTextColor(Color.rgb(170, 20, 20));
-        threatsView.setGravity(Gravity.CENTER);
-        threatsView.setPadding(0, dp(8), 0, 0);
-        root.addView(threatsView);
-
-        info = new TextView(this);
-        info.setTextColor(Color.GRAY);
-        info.setPadding(0, dp(6), 0, dp(10));
-        root.addView(info);
-
-        toggle = new Button(this);
-        toggle.setOnClickListener(new View.OnClickListener() {
-            public void onClick(View v) {
-                boolean on = !prefs.getBoolean(Prefs.ENABLED, true);
-                prefs.edit().putBoolean(Prefs.ENABLED, on).apply();
-                if (on) MonitorService.start(MainActivity.this);
-                else {
-                    stopService(new Intent(MainActivity.this, MonitorService.class));
-                    prefs.edit().putInt(Prefs.STATE, AlertSource.UNKNOWN).apply();
-                }
-                refresh();
+        Switch partial = new Switch(this);
+        partial.setText("Сповіщати й про тривогу в окремих громадах");
+        partial.setTextColor(TEXT);
+        partial.setTextSize(15);
+        partial.setPadding(0, dp(12), 0, 0);
+        partial.setChecked(prefs.getBoolean(Prefs.PARTIAL, false));
+        partial.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(CompoundButton c, boolean v) {
+                prefs.edit().putBoolean(Prefs.PARTIAL, v).apply();
+                if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.checkNow(MainActivity.this);
             }
         });
-        root.addView(toggle);
+        where.addView(partial);
+        root.addView(where, matchWrap(dp(12)));
 
-        LinearLayout row = new LinearLayout(this);
-        row.setOrientation(LinearLayout.HORIZONTAL);
-        row.addView(button("Тест тревоги", new View.OnClickListener() {
-            public void onClick(View v) {
-                List<String> t = MonitorService.parseList(prefs.getString(Prefs.THREATS, ""));
-                if (t.isEmpty()) t.add("drones");
-                Sounds.alarm(MainActivity.this, t);
-            }
-        }), weight());
-        row.addView(button("Тест отбоя", new View.OnClickListener() {
-            public void onClick(View v) { Sounds.clear(MainActivity.this); }
-        }), weight());
-        row.addView(button("Стоп звук", new View.OnClickListener() {
-            public void onClick(View v) { Sounds.stop(); }
-        }), weight());
-        root.addView(row);
-
-        root.addView(label("Голос перед сиреною:"));
+        // ---------- сповіщення ----------
+        LinearLayout notif = card("Сповіщення");
+        notif.addView(fieldLabel("Голос перед сиреною"));
         final Spinner voice = new Spinner(this);
         final String[] voiceIds = {"tetiana", "mykyta", "off"};
         ArrayAdapter<String> va = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item,
-                new String[]{"Жіночий (Тетяна)", "Чоловічий (Микита)", "Без голосу, тільки сирена"});
+                new String[]{"Жіночий (Тетяна)", "Чоловічий (Микита)", "Без голосу, лише сирена"});
         va.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         voice.setAdapter(va);
         String cv = prefs.getString(Prefs.VOICE, "tetiana");
@@ -166,61 +174,54 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             }
             public void onNothingSelected(AdapterView<?> p) { }
         });
-        root.addView(voice);
+        notif.addView(voice);
 
-        root.addView(label("Звуки:"));
-        LinearLayout row2 = new LinearLayout(this);
-        row2.setOrientation(LinearLayout.HORIZONTAL);
-        row2.addView(button("Свой звук тревоги…", new View.OnClickListener() {
+        notif.addView(fieldLabel("Свої звуки"));
+        LinearLayout row2 = row();
+        row2.addView(button("Сирена…", false, new View.OnClickListener() {
             public void onClick(View v) { pickSound(PICK_ALARM); }
-        }), weight());
-        row2.addView(button("Свой звук отбоя…", new View.OnClickListener() {
+        }), weight(0));
+        row2.addView(button("Відбій…", false, new View.OnClickListener() {
             public void onClick(View v) { pickSound(PICK_CLEAR); }
-        }), weight());
-        root.addView(row2);
-        soundInfo = new TextView(this);
-        soundInfo.setTextColor(Color.GRAY);
-        root.addView(soundInfo);
-        root.addView(button("Вернуть встроенные звуки", new View.OnClickListener() {
+        }), weight(dp(8)));
+        row2.addView(button("Скинути", false, new View.OnClickListener() {
             public void onClick(View v) {
                 prefs.edit().remove(Prefs.SOUND_ALARM).remove(Prefs.SOUND_CLEAR).apply();
                 refresh();
             }
-        }));
+        }), weight(dp(8)));
+        notif.addView(row2);
+        soundInfo = text("", 13, MUTED, false);
+        soundInfo.setPadding(0, dp(6), 0, 0);
+        notif.addView(soundInfo);
 
-        root.addView(button("Работа в фоне (экономия батареи)", new View.OnClickListener() {
+        View batt = button("Дозволити роботу у фоні", false, new View.OnClickListener() {
             public void onClick(View v) { askBattery(true); }
-        }));
-
-        root.addView(label("Токен alerts.in.ua (необязательно, надёжнее):"));
-        final EditText token = new EditText(this);
-        token.setSingleLine(true);
-        token.setInputType(InputType.TYPE_CLASS_TEXT | InputType.TYPE_TEXT_VARIATION_PASSWORD);
-        token.setHint("оставьте пустым — ubilling.net.ua");
-        token.setText(prefs.getString(Prefs.TOKEN, ""));
-        root.addView(token);
-
-        final CheckBox partial = new CheckBox(this);
-        partial.setText("Учитывать частичную тревогу (в районах), только с токеном");
-        partial.setChecked(prefs.getBoolean(Prefs.PARTIAL, false));
-        partial.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
-            public void onCheckedChanged(CompoundButton c, boolean v) {
-                prefs.edit().putBoolean(Prefs.PARTIAL, v).apply();
-            }
         });
-        root.addView(partial);
+        LinearLayout.LayoutParams bl = matchWrap(dp(12));
+        notif.addView(batt, bl);
+        root.addView(notif, matchWrap(dp(12)));
 
-        root.addView(button("Сохранить токен", new View.OnClickListener() {
+        // ---------- кнопки ----------
+        LinearLayout row = row();
+        row.addView(button("Тест тривоги", false, new View.OnClickListener() {
             public void onClick(View v) {
-                prefs.edit().putString(Prefs.TOKEN, token.getText().toString().trim()).apply();
-                if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.checkNow(MainActivity.this);
+                List<String> t = MonitorService.parseList(prefs.getString(Prefs.THREATS, ""));
+                if (t.isEmpty()) t.add("drones");
+                Sounds.alarm(MainActivity.this, t);
             }
-        }));
+        }), weight(0));
+        row.addView(button("Тест відбою", false, new View.OnClickListener() {
+            public void onClick(View v) { Sounds.clear(MainActivity.this); }
+        }), weight(dp(8)));
+        row.addView(button("Тиша", true, new View.OnClickListener() {
+            public void onClick(View v) { Sounds.stop(); }
+        }), weight(dp(8)));
+        root.addView(row, matchWrap(dp(16)));
 
-        TextView note = label("Это дополнительный сигнал. Держите включённым и официальное приложение «Повітряна тривога».");
-        note.setTextColor(Color.GRAY);
-        note.setPadding(0, dp(16), 0, 0);
-        root.addView(note);
+        footer = text("", 12, MUTED, false);
+        footer.setPadding(dp(4), dp(14), dp(4), 0);
+        root.addView(footer);
 
         setContentView(scroll);
 
@@ -228,9 +229,121 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         askBattery(false);
     }
 
+    // ---------- допоміжне для інтерфейсу ----------
+
+    private int dp(int v) {
+        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+    }
+
+    private TextView text(String s, int sp, int color, boolean bold) {
+        TextView t = new TextView(this);
+        t.setText(s);
+        t.setTextSize(sp);
+        t.setTextColor(color);
+        if (bold) t.setTypeface(Typeface.create("sans-serif-medium", Typeface.BOLD));
+        return t;
+    }
+
+    private TextView fieldLabel(String s) {
+        TextView t = text(s, 13, MUTED, false);
+        t.setPadding(0, dp(10), 0, dp(2));
+        return t;
+    }
+
+    private LinearLayout card(String caption) {
+        LinearLayout c = new LinearLayout(this);
+        c.setOrientation(LinearLayout.VERTICAL);
+        c.setPadding(dp(16), dp(14), dp(16), dp(16));
+        GradientDrawable bg = new GradientDrawable();
+        bg.setColor(Color.WHITE);
+        bg.setCornerRadius(dp(16));
+        bg.setStroke(dp(1), LINE);
+        c.setBackground(bg);
+        if (caption != null) {
+            TextView t = text(caption.toUpperCase(Locale.getDefault()), 12, MUTED, true);
+            t.setLetterSpacing(0.08f);
+            c.addView(t);
+        }
+        return c;
+    }
+
+    private LinearLayout row() {
+        LinearLayout r = new LinearLayout(this);
+        r.setOrientation(LinearLayout.HORIZONTAL);
+        return r;
+    }
+
+    private LinearLayout.LayoutParams matchWrap(int top) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT,
+                ViewGroup.LayoutParams.WRAP_CONTENT);
+        lp.topMargin = top;
+        return lp;
+    }
+
+    private LinearLayout.LayoutParams weight(int left) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(0, dp(48), 1f);
+        lp.leftMargin = left;
+        return lp;
+    }
+
+    private View button(String s, boolean dark, View.OnClickListener l) {
+        TextView btn = text(s, 14, dark ? Color.WHITE : TEXT, true);
+        btn.setGravity(Gravity.CENTER);
+        btn.setPadding(dp(8), dp(12), dp(8), dp(12));
+        btn.setMinHeight(dp(48));
+        GradientDrawable shape = new GradientDrawable();
+        shape.setColor(dark ? TEXT : Color.WHITE);
+        shape.setCornerRadius(dp(12));
+        if (!dark) shape.setStroke(dp(1), LINE);
+        Drawable bg = new RippleDrawable(ColorStateList.valueOf(dark ? 0x40FFFFFF : 0x22000000), shape, null);
+        btn.setBackground(bg);
+        btn.setClickable(true);
+        btn.setOnClickListener(l);
+        return btn;
+    }
+
+    private TextView chip(String s, boolean hot) {
+        TextView t = text(s, 13, hot ? DARK_RED : Color.WHITE, true);
+        t.setPadding(dp(12), dp(6), dp(12), dp(6));
+        GradientDrawable g = new GradientDrawable();
+        g.setColor(hot ? Color.WHITE : 0x38FFFFFF);
+        g.setCornerRadius(dp(16));
+        t.setBackground(g);
+        return t;
+    }
+
+    private void paintCard(int color) {
+        GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
+                new int[]{lighten(color, 0.08f), darken(color, 0.18f)});
+        g.setCornerRadius(dp(24));
+        statusCard.setBackground(g);
+        if (Build.VERSION.SDK_INT >= 21) {
+            Window w = getWindow();
+            w.setStatusBarColor(darken(color, 0.25f));
+        }
+    }
+
+    private static int lighten(int c, float k) {
+        return Color.rgb((int) (Color.red(c) + (255 - Color.red(c)) * k), (int) (Color.green(c) + (255 - Color.green(c)) * k),
+                (int) (Color.blue(c) + (255 - Color.blue(c)) * k));
+    }
+
+    private static int darken(int c, float k) {
+        return Color.rgb((int) (Color.red(c) * (1 - k)), (int) (Color.green(c) * (1 - k)), (int) (Color.blue(c) * (1 - k)));
+    }
+
+    private static String ago(long t) {
+        long m = (System.currentTimeMillis() - t) / 60000;
+        if (m < 1) return "щойно";
+        if (m < 60) return m + " хв";
+        return (m / 60) + " год " + (m % 60) + " хв";
+    }
+
+    // ---------- логіка ----------
+
     private void fillRaions() {
         raionUids.clear();
-        java.util.ArrayList<String> names = new java.util.ArrayList<String>();
+        List<String> names = new ArrayList<String>();
         raionUids.add(0);
         names.add("Вся область");
         int obl = Locations.oblastUid(Prefs.region(this));
@@ -277,16 +390,17 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         if (Build.VERSION.SDK_INT < 23) return;
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         if (pm.isIgnoringBatteryOptimizations(getPackageName())) {
-            if (force) new AlertDialog.Builder(this).setMessage("Экономия батареи для приложения уже отключена — оно может работать в фоне.")
+            if (force) new AlertDialog.Builder(this)
+                    .setMessage("Економію батареї для програми вже вимкнено — вона може працювати у фоні.")
                     .setPositiveButton("OK", null).show();
             return;
         }
         if (!force && prefs.getBoolean(Prefs.ASKED_BATTERY, false)) return;
         prefs.edit().putBoolean(Prefs.ASKED_BATTERY, true).apply();
         new AlertDialog.Builder(this)
-                .setTitle("Работа в фоне")
-                .setMessage("Чтобы телефон не «усыплял» слежение за тревогой, разрешите приложению работать без ограничений батареи.")
-                .setPositiveButton("Разрешить", new DialogInterface.OnClickListener() {
+                .setTitle("Робота у фоні")
+                .setMessage("Щоб телефон не «присипляв» стеження за тривогою, дозвольте програмі працювати без обмежень батареї.")
+                .setPositiveButton("Дозволити", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int w) {
                         try {
                             startActivity(new Intent("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
@@ -297,20 +411,28 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
                         }
                     }
                 })
-                .setNegativeButton("Позже", null)
+                .setNegativeButton("Пізніше", null)
                 .show();
     }
+
+    private final Runnable tick = new Runnable() {
+        public void run() {
+            refresh();
+            ticker.postDelayed(this, 30000);   // оновлюємо «триває N хв»
+        }
+    };
 
     @Override
     protected void onResume() {
         super.onResume();
         prefs.registerOnSharedPreferenceChangeListener(this);
-        refresh();
+        ticker.post(tick);
     }
 
     @Override
     protected void onPause() {
         prefs.unregisterOnSharedPreferenceChangeListener(this);
+        ticker.removeCallbacks(tick);
         super.onPause();
     }
 
@@ -321,53 +443,47 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     private void refresh() {
         boolean on = prefs.getBoolean(Prefs.ENABLED, true);
         int state = prefs.getInt(Prefs.STATE, AlertSource.UNKNOWN);
-        if (!on) {
-            status.setText("Слежение выключено");
-            status.setBackgroundColor(Color.rgb(120, 120, 120));
-        } else if (state == AlertSource.ALERT) {
-            status.setText("ПОВІТРЯНА ТРИВОГА");
-            status.setBackgroundColor(Color.rgb(200, 30, 30));
-        } else if (state == AlertSource.CLEAR) {
-            status.setText("Тривоги немає");
-            status.setBackgroundColor(Color.rgb(30, 140, 60));
-        } else {
-            status.setText("Проверка…");
-            status.setBackgroundColor(Color.rgb(120, 120, 120));
-        }
-        String th = AlertSource.titles(MonitorService.parseList(prefs.getString(Prefs.THREATS, "")));
-        threatsView.setText(on && state == AlertSource.ALERT ? th : "");
-        threatsView.setVisibility(threatsView.getText().length() > 0 ? View.VISIBLE : View.GONE);
+        List<String> threats = MonitorService.parseList(prefs.getString(Prefs.THREATS, ""));
         String err = prefs.getString(Prefs.ERROR, null);
+        long since = prefs.getLong(Prefs.SINCE, 0), cleared = prefs.getLong(Prefs.CLEARED_AT, 0);
+        SimpleDateFormat hm = new SimpleDateFormat("HH:mm", Locale.getDefault());
+
+        place.setText(Prefs.place(this));
+        chips.removeAllViews();
+        if (!on) {
+            title.setText("Стеження вимкнено");
+            detail.setText("Увімкніть, щоб отримувати сигнали");
+            paintCard(GRAY);
+        } else if (state == AlertSource.ALERT) {
+            boolean ballistic = threats.contains("ballistic_missiles");
+            title.setText(ballistic ? "БАЛІСТИКА!" : "ПОВІТРЯНА ТРИВОГА");
+            detail.setText(since > 0 ? "Триває " + ago(since) + " · з " + hm.format(new Date(since)) : "Пройдіть в укриття");
+            for (int i = 0; i < threats.size(); i++)
+                chips.addView(chip(AlertSource.threatTitle(threats.get(i)), ballistic && i == 0));
+            paintCard(ballistic ? DARK_RED : RED);
+        } else if (state == AlertSource.CLEAR) {
+            title.setText("Тривоги немає");
+            detail.setText(cleared > 0 ? "Відбій о " + hm.format(new Date(cleared)) : "Спокійно");
+            paintCard(GREEN);
+        } else {
+            title.setText(err != null ? "Немає зв'язку" : "Перевірка…");
+            detail.setText(err != null ? err : "");
+            paintCard(GRAY);
+        }
+        chips.setVisibility(chips.getChildCount() > 0 ? View.VISIBLE : View.GONE);
+
+        StringBuilder f = new StringBuilder();
         String t = prefs.getString(Prefs.STATUS_TIME, null);
-        if (!on) info.setText("");
-        else if (err != null) info.setText(err);
-        else if (t != null) info.setText(Prefs.place(this) + " · проверено в " + t + " · " + prefs.getString(Prefs.SOURCE, ""));
-        else info.setText("");
-        if (soundInfo != null) soundInfo.setText("Тревога: " + (prefs.contains(Prefs.SOUND_ALARM) ? "свой файл" : "встроенная сирена")
-                + " · Отбой: " + (prefs.contains(Prefs.SOUND_CLEAR) ? "свой файл" : "встроенный сигнал"));
-        toggle.setText(on ? "Выключить слежение" : "Включить слежение");
-    }
+        if (on && t != null) f.append("Оновлено о ").append(t).append(" · ").append(prefs.getString(Prefs.SOURCE, ""));
+        String note = prefs.getString(Prefs.NOTE, "");
+        if (on && note.length() > 0) f.append(" · ").append(note);
+        if (on && err != null && state != AlertSource.UNKNOWN) f.append(" · немає зв'язку: ").append(err);
+        if (f.length() > 0) f.append("\n\n");
+        f.append("Це додатковий сигнал. Тримайте увімкненим і офіційний застосунок «Повітряна тривога».");
+        footer.setText(f.toString());
 
-    private TextView label(String s) {
-        TextView t = new TextView(this);
-        t.setText(s);
-        t.setPadding(0, dp(12), 0, dp(4));
-        return t;
-    }
-
-    private Button button(String s, View.OnClickListener l) {
-        Button btn = new Button(this);
-        btn.setText(s);
-        btn.setAllCaps(false);
-        btn.setOnClickListener(l);
-        return btn;
-    }
-
-    private LinearLayout.LayoutParams weight() {
-        return new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f);
-    }
-
-    private int dp(int v) {
-        return (int) (v * getResources().getDisplayMetrics().density + 0.5f);
+        soundInfo.setText("Сирена: " + (prefs.contains(Prefs.SOUND_ALARM) ? "свій файл" : "вбудована")
+                + " · Відбій: " + (prefs.contains(Prefs.SOUND_CLEAR) ? "свій файл" : "вбудований"));
+        if (enabledSwitch.isChecked() != on) enabledSwitch.setChecked(on);
     }
 }

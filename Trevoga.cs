@@ -1,14 +1,18 @@
-﻿// Тревога — монитор воздушной тревоги для Windows 7/8/10/11
-// Собирается встроенным компилятором .NET Framework 4.x (см. build.bat).
-// Только C# 5 — чтобы собирался старым csc.exe из Windows 7.
+﻿// Тривога — монітор повітряної тривоги для Windows 7/8/10/11
+// Збирається вбудованим компілятором .NET Framework 4.x (див. build.bat). Лише C# 5.
+//
+// Дані: сервер-посередник (адреса в config.json, токен alerts.in.ua зберігається лише на сервері).
+// Якщо сервер недоступний — ubilling.net.ua (лише області).
 
 using System;
 using System.Collections.Generic;
 using System.Drawing;
+using System.Drawing.Drawing2D;
+using System.Drawing.Text;
 using System.IO;
 using System.Media;
-using System.Runtime.InteropServices;
 using System.Net;
+using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
 using System.Threading;
@@ -16,7 +20,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("1.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.0.0.0")]
 
 namespace Trevoga
 {
@@ -25,7 +29,7 @@ namespace Trevoga
         [STAThread]
         static void Main()
         {
-            // Windows 7: включаем TLS 1.2 / 1.1 явно (3072 = Tls12, 768 = Tls11).
+            // Windows 7: явно вмикаємо TLS 1.2 / 1.1 (3072 = Tls12, 768 = Tls11).
             try
             {
                 ServicePointManager.SecurityProtocol =
@@ -41,7 +45,7 @@ namespace Trevoga
             {
                 if (!createdNew)
                 {
-                    MessageBox.Show("Программа уже запущена (значок возле часов).", "Тревога",
+                    MessageBox.Show("Програма вже запущена (значок біля годинника).", "Тривога",
                         MessageBoxButtons.OK, MessageBoxIcon.Information);
                     return;
                 }
@@ -55,16 +59,16 @@ namespace Trevoga
         }
     }
 
-    // ---------------- Настройки (trevoga.ini рядом с exe) ----------------
+    // ---------------- Налаштування (trevoga.ini поруч з exe) ----------------
     class Settings
     {
         public string Region = "м. Київ";
-        public int Raion = 0;              // uid района alerts.in.ua, 0 = вся область
-        public string Token = "";          // токен alerts.in.ua (необязательно)
-        public int Interval = 15;          // секунд между проверками
-        public bool Partial = false;       // считать частичную тревогу (только alerts.in.ua)
+        public int Raion = 0;              // uid району alerts.in.ua, 0 = вся область
+        public int Interval = 20;          // секунд між перевірками
+        public bool Partial = false;       // вважати тривогою часткову (окремі громади)
         public bool Sound = true;
-        public string Voice = "tetiana";  // tetiana, mykyta, off
+        public string Voice = "tetiana";   // tetiana, mykyta, off
+        public string Server = "";         // остання адреса сервера з config.json на GitHub
 
         static string FilePath
         {
@@ -88,15 +92,15 @@ namespace Trevoga
                     int n;
                     if (k == "region" && v.Length > 0) s.Region = v;
                     else if (k == "raion" && int.TryParse(v, out n)) s.Raion = n;
-                    else if (k == "token") s.Token = v;
                     else if (k == "interval" && int.TryParse(v, out n)) s.Interval = n;
                     else if (k == "partial") s.Partial = (v == "1" || v.ToLower() == "true");
                     else if (k == "sound") s.Sound = !(v == "0" || v.ToLower() == "false");
                     else if (k == "voice" && (v == "tetiana" || v == "mykyta" || v == "off")) s.Voice = v;
+                    else if (k == "server") s.Server = v;
                 }
             }
             catch { }
-            if (s.Interval < 10) s.Interval = 10;   // лимит API: не чаще ~8 запросов в минуту
+            if (s.Interval < 10) s.Interval = 10;
             return s;
         }
 
@@ -105,24 +109,57 @@ namespace Trevoga
             try
             {
                 StringBuilder sb = new StringBuilder();
-                sb.AppendLine("; Настройки программы Тревога");
-                sb.AppendLine("; region   - область (как в списке программы)");
-                sb.AppendLine("; raion    - код района (0 = вся область). Районы работают только с токеном");
-                sb.AppendLine("; token    - токен alerts.in.ua (можно оставить пустым)");
-                sb.AppendLine("; interval - как часто проверять, секунд (минимум 10)");
-                sb.AppendLine("; partial  - 1 = считать тревогой и частичную (в части района/области), только с токеном");
-                sb.AppendLine("; sound    - 1 = звук включён, 0 = выключен");
+                sb.AppendLine("; Налаштування програми Тривога");
+                sb.AppendLine("; region   - область (як у списку програми)");
+                sb.AppendLine("; raion    - код району (0 = вся область)");
+                sb.AppendLine("; interval - як часто перевіряти, секунд (мінімум 10)");
+                sb.AppendLine("; partial  - 1 = вважати тривогою і часткову (окремі громади)");
+                sb.AppendLine("; sound    - 1 = звук увімкнено, 0 = вимкнено");
                 sb.AppendLine("; voice    - голос: tetiana (жіночий), mykyta (чоловічий), off (без голосу)");
+                sb.AppendLine("; server   - адреса сервера; програма оновлює її сама з config.json на GitHub");
                 sb.AppendLine("region=" + Region);
                 sb.AppendLine("raion=" + Raion);
-                sb.AppendLine("token=" + Token);
                 sb.AppendLine("interval=" + Interval);
                 sb.AppendLine("partial=" + (Partial ? "1" : "0"));
                 sb.AppendLine("sound=" + (Sound ? "1" : "0"));
                 sb.AppendLine("voice=" + Voice);
+                sb.AppendLine("server=" + Server);
                 File.WriteAllText(FilePath, sb.ToString(), new UTF8Encoding(true));
             }
             catch { }
+        }
+    }
+
+    // ---------------- Адреса сервера ----------------
+    static class AppConfig
+    {
+        // Працює, якщо репозиторій публічний. Якщо ні — використовується адреса, вшита при збірці.
+        public const string ConfigUrl = "https://raw.githubusercontent.com/repaulshadow/spokiy/main/config.json";
+
+        static string ParseServer(string json)
+        {
+            Dictionary<string, object> d = Json.Parse(json) as Dictionary<string, object>;
+            object v;
+            if (d == null || !d.TryGetValue("server", out v) || v == null) return "";
+            return Convert.ToString(v).Trim().TrimEnd('/');
+        }
+
+        public static string Embedded()
+        {
+            try
+            {
+                Stream st = typeof(AppConfig).Assembly.GetManifestResourceStream("config.json");
+                if (st == null) return "";
+                using (StreamReader r = new StreamReader(st, Encoding.UTF8)) return ParseServer(r.ReadToEnd());
+            }
+            catch { return ""; }
+        }
+
+        // null — не вдалося завантажити
+        public static string Fetch()
+        {
+            try { return ParseServer(AlertSource.Download(ConfigUrl + "?t=" + DateTime.UtcNow.Ticks)); }
+            catch { return null; }
         }
     }
 
@@ -216,12 +253,21 @@ namespace Trevoga
         }
     }
 
-    // ---------------- Получение статуса ----------------
+    // ---------------- Отримання статусу ----------------
     enum AlertState { Unknown, Alert, Clear }
+
+    class CheckResult
+    {
+        public AlertState State = AlertState.Unknown;
+        public List<string> Threats = new List<string>();
+        public DateTime? Since;          // з якого часу триває поточний стан (якщо відомо)
+        public string Source = "";
+        public string Note = "";         // пояснення: сервер недоступний, район лише через сервер тощо
+    }
 
     static class AlertSource
     {
-        // Порядок областей в строке alerts.in.ua /v1/iot/active_air_raid_alerts_by_oblast.json
+        // Порядок областей у списку програми
         public static readonly string[] Regions = new string[] {
             "Автономна Республіка Крим", "Волинська область", "Вінницька область",
             "Дніпропетровська область", "Донецька область", "Житомирська область",
@@ -234,26 +280,16 @@ namespace Trevoga
             "Чернігівська область"
         };
 
-        static string Download(string url, string bearer)
+        public static string Download(string url)
         {
             HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
             req.Timeout = 15000;
             req.ReadWriteTimeout = 15000;
-            req.UserAgent = "Trevoga-Win/1.0";
+            req.UserAgent = "Trevoga-Win/2.0";
             req.Accept = "application/json";
-            if (!string.IsNullOrEmpty(bearer))
-                req.Headers.Add("Authorization", "Bearer " + bearer);
             using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
             using (StreamReader r = new StreamReader(resp.GetResponseStream(), Encoding.UTF8))
                 return r.ReadToEnd();
-        }
-
-        static string DecodeJsonEscapes(string s)
-        {
-            return Regex.Replace(s, @"\\u([0-9a-fA-F]{4})", delegate(Match m)
-            {
-                return ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString();
-            });
         }
 
         public static int OblastUid(string name)
@@ -268,20 +304,6 @@ namespace Trevoga
             return i >= 0 ? Locations.RaionName[i] : null;
         }
 
-        // Возвращает состояние; source — откуда взяли, для отображения.
-        public static AlertState Check(Settings s, out string source)
-        {
-            if (!string.IsNullOrEmpty(s.Token))
-            {
-                source = "alerts.in.ua";
-                return CheckAlertsInUa(s);
-            }
-            source = s.Raion != 0 ? "ubilling.net.ua · район без токена недоступен, следим за всей областью"
-                                  : "ubilling.net.ua";
-            return CheckUbilling(s.Region);
-        }
-
-        // Названия угроз alerts.in.ua
         public static string ThreatTitle(string t)
         {
             switch (t)
@@ -299,9 +321,13 @@ namespace Trevoga
                 case "urban_fights": return "Вуличні бої";
                 case "chemical": return "Хімічна загроза";
                 case "nuclear": return "Радіаційна загроза";
-                default: return "Невідома загроза";
+                default: return "Інша загроза";
             }
         }
+
+        static readonly string[] Order = { "ballistic_missiles", "cruise_missiles", "unspecified_missiles",
+            "mig31k_departure", "guided_aerial_bombs", "drones", "strategic_aircraft_activity",
+            "tactic_aircraft_activity", "air_defense", "artillery_shelling", "urban_fights", "chemical", "nuclear" };
 
         static int ToInt(object o)
         {
@@ -309,88 +335,119 @@ namespace Trevoga
             return o != null && int.TryParse(Convert.ToString(o, System.Globalization.CultureInfo.InvariantCulture).Split('.')[0], out n) ? n : -1;
         }
 
-        // Типы угроз по выбранной области/району (только с токеном). Порядок — по важности.
-        public static List<string> GetThreats(Settings s)
-        {
-            int obl = OblastUid(s.Region);
-            string raionName = s.Raion != 0 ? RaionName(s.Raion) : null;
-            string body = Download("https://api.alerts.in.ua/v1/alerts/active.json", s.Token);
-            Dictionary<string, object> root = Json.Parse(body) as Dictionary<string, object>;
-            List<string> found = new List<string>();
-            object arr;
-            if (root == null || !root.TryGetValue("alerts", out arr) || !(arr is List<object>)) return found;
-            foreach (object o in (List<object>)arr)
-            {
-                Dictionary<string, object> a = o as Dictionary<string, object>;
-                if (a == null) continue;
-                object v;
-                int locUid = a.TryGetValue("location_uid", out v) ? ToInt(v) : -1;
-                int locObl = a.TryGetValue("location_oblast_uid", out v) ? ToInt(v) : -1;
-                if (locObl < 0 && a.TryGetValue("location_oblast", out v) && Convert.ToString(v) == s.Region) locObl = obl;
-                if (locObl != obl && locUid != obl) continue;
-                if (s.Raion != 0 && locUid != obl && locUid != s.Raion)
-                {
-                    string r = a.TryGetValue("location_raion", out v) ? Convert.ToString(v) : null;
-                    if (r == null || r != raionName) continue;
-                }
-                string type = a.TryGetValue("alert_type", out v) ? Convert.ToString(v) : "air_raid";
-                if (type != "air_raid" && !found.Contains(type)) found.Add(type);
-                if (a.TryGetValue("threats", out v) && v is List<object>)
-                    foreach (object t in (List<object>)v)
-                    {
-                        Dictionary<string, object> td = t as Dictionary<string, object>;
-                        object tt;
-                        if (td != null && td.TryGetValue("threat_type", out tt) && tt != null && !found.Contains((string)tt))
-                            found.Add((string)tt);
-                    }
-            }
-            string[] order = { "ballistic_missiles", "cruise_missiles", "unspecified_missiles", "mig31k_departure",
-                "guided_aerial_bombs", "drones", "strategic_aircraft_activity", "tactic_aircraft_activity",
-                "air_defense", "artillery_shelling", "urban_fights", "chemical", "nuclear" };
-            found.Sort(delegate(string x, string y)
-            {
-                int ix = Array.IndexOf(order, x), iy = Array.IndexOf(order, y);
-                if (ix < 0) ix = 99; if (iy < 0) iy = 99;
-                return ix.CompareTo(iy);
-            });
-            return found;
-        }
-
         static char CharAt(string str, int uid)
         {
-            if (uid < 0 || uid >= str.Length || str[uid] == ' ') throw new Exception("Неожиданный ответ сервера");
+            if (uid < 0 || uid >= str.Length || str[uid] == ' ') throw new Exception("неочікувана відповідь сервера");
             return char.ToUpperInvariant(str[uid]);
         }
 
-        // Строка, где символ с индексом uid — статус области/района: A — тревога, P — частичная, N — нет
-        static AlertState CheckAlertsInUa(Settings s)
+        public static CheckResult Check(Settings s, string server)
         {
-            int obl = OblastUid(s.Region);
-            if (obl < 0) throw new Exception("Неизвестная область: " + s.Region);
-            string body = Download("https://api.alerts.in.ua/v1/iot/active_air_raid_alerts.json", s.Token).Trim();
-            if (body.StartsWith("\"")) body = body.Substring(1);
-            if (body.EndsWith("\"")) body = body.Substring(0, body.Length - 1);
-            char o = CharAt(body, obl);
-            if (o == 'A') return AlertState.Alert;               // тревога по всей области
-            char c = s.Raion != 0 ? CharAt(body, s.Raion) : o;
-            if (c == 'A') return AlertState.Alert;
-            if (c == 'P') return s.Partial ? AlertState.Alert : AlertState.Clear;
-            if (c == 'N') return AlertState.Clear;
-            throw new Exception("Неожиданный ответ сервера");
+            string serverError = null;
+            if (!string.IsNullOrEmpty(server))
+            {
+                try { return FromServer(s, server); }
+                catch (Exception ex) { serverError = ex.Message; }
+            }
+            CheckResult r = FromUbilling(s.Region);
+            List<string> notes = new List<string>();
+            if (serverError != null) notes.Add("сервер недоступний");
+            if (s.Raion != 0) notes.Add("район — лише через сервер, стежимо за всією областю");
+            r.Note = string.Join(" · ", notes.ToArray());
+            return r;
         }
 
-        static AlertState CheckUbilling(string region)
+        static CheckResult FromServer(Settings s, string server)
         {
-            // В этом источнике Севастополь называется без "м."
-            string name = region == "м. Севастополь" ? "Севастополь" : region;
+            int obl = OblastUid(s.Region);
+            if (obl < 0) throw new Exception("невідома область");
+            Dictionary<string, object> root = Json.Parse(Download(server + "/status")) as Dictionary<string, object>;
+            object v;
+            if (root == null || !root.TryGetValue("air", out v) || !(v is string)) throw new Exception("неочікувана відповідь сервера");
+            string air = (string)v;
+
+            CheckResult r = new CheckResult();
+            r.Source = "сервер";
+            char o = CharAt(air, obl);
+            char c = s.Raion != 0 ? CharAt(air, s.Raion) : o;
+            if (o == 'A' || c == 'A') r.State = AlertState.Alert;
+            else if (c == 'P') r.State = s.Partial ? AlertState.Alert : AlertState.Clear;
+            else if (c == 'N') r.State = AlertState.Clear;
+            else throw new Exception("неочікувана відповідь сервера");
+
+            string raionName = s.Raion != 0 ? RaionName(s.Raion) : null;
+            if (root.TryGetValue("alerts", out v) && v is List<object>)
+            {
+                foreach (object item in (List<object>)v)
+                {
+                    Dictionary<string, object> a = item as Dictionary<string, object>;
+                    if (a == null) continue;
+                    object x;
+                    int u = a.TryGetValue("u", out x) ? ToInt(x) : -1;
+                    int ao = a.TryGetValue("o", out x) ? ToInt(x) : -1;
+                    if (ao != obl && u != obl) continue;
+                    if (s.Raion != 0 && u != obl && u != s.Raion)
+                    {
+                        string rn = a.TryGetValue("r", out x) && x != null ? Convert.ToString(x) : null;
+                        if (rn == null || rn != raionName) continue;
+                    }
+                    if (s.Raion == 0 && u != obl && !(s.Partial || o == 'A')) continue;   // лише частина області
+                    if (a.TryGetValue("s", out x) && x != null)
+                    {
+                        try
+                        {
+                            DateTime st = DateTime.Parse(Convert.ToString(x), System.Globalization.CultureInfo.InvariantCulture,
+                                System.Globalization.DateTimeStyles.RoundtripKind).ToLocalTime();
+                            if (r.Since == null || st < r.Since.Value) r.Since = st;
+                        }
+                        catch { }
+                    }
+                    if (a.TryGetValue("t", out x) && x is List<object>)
+                        foreach (object t in (List<object>)x)
+                        {
+                            string ts = Convert.ToString(t);
+                            if (!string.IsNullOrEmpty(ts) && !r.Threats.Contains(ts)) r.Threats.Add(ts);
+                        }
+                }
+            }
+            if (r.State != AlertState.Alert) { r.Threats.Clear(); r.Since = null; }
+            r.Threats.Sort(delegate(string a1, string b1)
+            {
+                int ia = Array.IndexOf(Order, a1), ib = Array.IndexOf(Order, b1);
+                if (ia < 0) ia = 99; if (ib < 0) ib = 99;
+                return ia.CompareTo(ib);
+            });
+            return r;
+        }
+
+        static string DecodeJsonEscapes(string s)
+        {
+            return Regex.Replace(s, @"\\u([0-9a-fA-F]{4})", delegate(Match m)
+            {
+                return ((char)Convert.ToInt32(m.Groups[1].Value, 16)).ToString();
+            });
+        }
+
+        static CheckResult FromUbilling(string region)
+        {
             if (region == "Автономна Республіка Крим")
-                throw new Exception("Для Крыма нужен токен alerts.in.ua");
-            string body = DecodeJsonEscapes(Download("https://ubilling.net.ua/aerialalerts/", null));
-            Match m = Regex.Match(body,
-                "\"" + Regex.Escape(name) + "\"\\s*:\\s*\\{[^}]*?\"alertnow\"\\s*:\\s*(true|false)",
-                RegexOptions.IgnoreCase);
-            if (!m.Success) throw new Exception("Область не найдена в ответе сервера");
-            return m.Groups[1].Value.ToLower() == "true" ? AlertState.Alert : AlertState.Clear;
+                throw new Exception("для Криму потрібен сервер");
+            string name = region == "м. Севастополь" ? "Севастополь" : region;
+            string body = DecodeJsonEscapes(Download("https://ubilling.net.ua/aerialalerts/"));
+            Match m = Regex.Match(body, "\"" + Regex.Escape(name) + "\"\\s*:\\s*\\{([^}]*)\\}", RegexOptions.IgnoreCase);
+            if (!m.Success) throw new Exception("область не знайдено у відповіді");
+            Match a = Regex.Match(m.Groups[1].Value, "\"alertnow\"\\s*:\\s*(true|false)", RegexOptions.IgnoreCase);
+            if (!a.Success) throw new Exception("неочікувана відповідь");
+            CheckResult r = new CheckResult();
+            r.Source = "ubilling.net.ua";
+            r.State = a.Groups[1].Value.ToLower() == "true" ? AlertState.Alert : AlertState.Clear;
+            Match ch = Regex.Match(m.Groups[1].Value, "\"changed\"\\s*:\\s*\"([^\"]+)\"");
+            DateTime dt;
+            if (r.State == AlertState.Alert && ch.Success &&
+                DateTime.TryParse(ch.Groups[1].Value, System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.AssumeLocal, out dt))
+                r.Since = dt;
+            return r;
         }
     }
 
@@ -697,22 +754,221 @@ namespace Trevoga
         }
     }
 
-    // ---------------- Окно ----------------
+    // ---------------- Малювання ----------------
+    static class Gfx
+    {
+        public static GraphicsPath Round(RectangleF r, float rad)
+        {
+            GraphicsPath p = new GraphicsPath();
+            float d = rad * 2;
+            p.AddArc(r.X, r.Y, d, d, 180, 90);
+            p.AddArc(r.Right - d, r.Y, d, d, 270, 90);
+            p.AddArc(r.Right - d, r.Bottom - d, d, d, 0, 90);
+            p.AddArc(r.X, r.Bottom - d, d, d, 90, 90);
+            p.CloseFigure();
+            return p;
+        }
+
+        public static Color Mix(Color a, Color b, float k)
+        {
+            return Color.FromArgb((int)(a.R + (b.R - a.R) * k), (int)(a.G + (b.G - a.G) * k), (int)(a.B + (b.B - a.B) * k));
+        }
+
+        public static readonly Color Bg = Color.FromArgb(243, 244, 246);
+        public static readonly Color Text = Color.FromArgb(17, 24, 39);
+        public static readonly Color Muted = Color.FromArgb(107, 114, 128);
+        public static readonly Color Line = Color.FromArgb(229, 231, 235);
+        public static readonly Color Red = Color.FromArgb(220, 38, 38);
+        public static readonly Color DarkRed = Color.FromArgb(153, 27, 27);
+        public static readonly Color Green = Color.FromArgb(22, 163, 74);
+        public static readonly Color Gray = Color.FromArgb(107, 114, 128);
+
+        // Круглий значок для трею та вікна
+        public static Icon Dot(Color c, int size)
+        {
+            Bitmap b = new Bitmap(size, size);
+            using (Graphics g = Graphics.FromImage(b))
+            {
+                g.SmoothingMode = SmoothingMode.AntiAlias;
+                g.Clear(Color.Transparent);
+                float m = size / 16f;
+                using (SolidBrush br = new SolidBrush(c)) g.FillEllipse(br, m, m, size - 2 * m, size - 2 * m);
+                using (Pen pen = new Pen(Color.FromArgb(200, 255, 255, 255), Math.Max(1f, size / 12f)))
+                    g.DrawEllipse(pen, m, m, size - 2 * m, size - 2 * m);
+                // маленький «сигнал» усередині
+                using (SolidBrush w = new SolidBrush(Color.White))
+                {
+                    float cx = size / 2f, cy = size / 2f, r = size * 0.14f;
+                    g.FillEllipse(w, cx - r, cy - r, 2 * r, 2 * r);
+                }
+            }
+            return Icon.FromHandle(b.GetHicon());
+        }
+    }
+
+    // Велика картка статусу
+    class StatusCard : Control
+    {
+        public string Title = "Перевірка…";
+        public string Place = "";
+        public string Detail = "";
+        public List<string> Chips = new List<string>();
+        public bool HotFirstChip = false;     // перша плашка — балістика, виділяємо
+        public Color CardColor = Gfx.Gray;
+
+        public StatusCard()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Gfx.Bg;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+            using (GraphicsPath p = Gfx.Round(r, 16))
+            using (LinearGradientBrush br = new LinearGradientBrush(r, Gfx.Mix(CardColor, Color.White, 0.08f),
+                       Gfx.Mix(CardColor, Color.Black, 0.18f), LinearGradientMode.ForwardDiagonal))
+                g.FillPath(br, p);
+
+            float x = 22, y = 18;
+            using (Font fTitle = new Font("Segoe UI Semibold", 20f, FontStyle.Bold))
+            using (Font fPlace = new Font("Segoe UI", 10.5f))
+            using (Font fDetail = new Font("Segoe UI", 9.5f))
+            using (SolidBrush white = new SolidBrush(Color.White))
+            using (SolidBrush soft = new SolidBrush(Color.FromArgb(225, 255, 255, 255)))
+            {
+                g.DrawString(Title, fTitle, white, new RectangleF(x, y, Width - 2 * x, 40));
+                y += 42;
+                if (Place.Length > 0) { g.DrawString(Place, fPlace, soft, new RectangleF(x, y, Width - 2 * x, 22)); y += 22; }
+                if (Detail.Length > 0) { g.DrawString(Detail, fDetail, soft, new RectangleF(x, y, Width - 2 * x, 20)); y += 22; }
+            }
+
+            if (Chips.Count == 0) return;
+            float cx = 22, cy = Height - 22 - 26;
+            using (Font fChip = new Font("Segoe UI Semibold", 9.5f, FontStyle.Bold))
+            {
+                // переносимо плашки на другий рядок, якщо не влазять
+                List<RectangleF> rects = new List<RectangleF>();
+                float rowY = 0;
+                foreach (string c in Chips)
+                {
+                    SizeF sz = g.MeasureString(c, fChip);
+                    float w = sz.Width + 18;
+                    if (cx + w > Width - 18 && cx > 22) { cx = 22; rowY += 30; }
+                    rects.Add(new RectangleF(cx, rowY, w, 26));
+                    cx += w + 8;
+                }
+                float shift = cy - rowY;
+                for (int i = 0; i < Chips.Count; i++)
+                {
+                    RectangleF cr = rects[i];
+                    cr.Y += shift;
+                    bool hot = HotFirstChip && i == 0;
+                    using (GraphicsPath p = Gfx.Round(cr, 13))
+                    using (SolidBrush b = new SolidBrush(hot ? Color.White : Color.FromArgb(55, 255, 255, 255)))
+                        g.FillPath(b, p);
+                    using (SolidBrush t = new SolidBrush(hot ? Gfx.DarkRed : Color.White))
+                    {
+                        StringFormat sf = new StringFormat();
+                        sf.Alignment = StringAlignment.Center;
+                        sf.LineAlignment = StringAlignment.Center;
+                        g.DrawString(Chips[i], fChip, t, cr, sf);
+                    }
+                }
+            }
+        }
+    }
+
+    // Біла картка-секція із заголовком
+    class Card : Panel
+    {
+        public string Caption = "";
+
+        public Card()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint, true);
+            BackColor = Gfx.Bg;
+        }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+            using (GraphicsPath p = Gfx.Round(r, 12))
+            {
+                using (SolidBrush b = new SolidBrush(Color.White)) g.FillPath(b, p);
+                using (Pen pen = new Pen(Gfx.Line)) g.DrawPath(pen, p);
+            }
+            if (Caption.Length > 0)
+                using (Font f = new Font("Segoe UI Semibold", 9f, FontStyle.Bold))
+                using (SolidBrush b = new SolidBrush(Gfx.Muted))
+                    g.DrawString(Caption.ToUpperInvariant(), f, b, 16, 12);
+        }
+    }
+
+    // Пласка кнопка із заокругленням
+    class FlatBtn : Control
+    {
+        public Color Fill = Color.White, Fore = Gfx.Text, Border = Gfx.Line;
+        bool hover, down;
+
+        public FlatBtn()
+        {
+            SetStyle(ControlStyles.AllPaintingInWmPaint | ControlStyles.OptimizedDoubleBuffer |
+                     ControlStyles.ResizeRedraw | ControlStyles.UserPaint | ControlStyles.SupportsTransparentBackColor, true);
+            BackColor = Gfx.Bg;
+            Cursor = Cursors.Hand;
+            Font = new Font("Segoe UI Semibold", 9.75f, FontStyle.Bold);
+        }
+
+        protected override void OnMouseEnter(EventArgs e) { hover = true; Invalidate(); base.OnMouseEnter(e); }
+        protected override void OnMouseLeave(EventArgs e) { hover = false; down = false; Invalidate(); base.OnMouseLeave(e); }
+        protected override void OnMouseDown(MouseEventArgs e) { down = true; Invalidate(); base.OnMouseDown(e); }
+        protected override void OnMouseUp(MouseEventArgs e) { down = false; Invalidate(); base.OnMouseUp(e); }
+
+        protected override void OnPaint(PaintEventArgs e)
+        {
+            Graphics g = e.Graphics;
+            g.SmoothingMode = SmoothingMode.AntiAlias;
+            g.TextRenderingHint = TextRenderingHint.ClearTypeGridFit;
+            Color f = down ? Gfx.Mix(Fill, Color.Black, 0.12f) : hover ? Gfx.Mix(Fill, Color.Black, 0.05f) : Fill;
+            RectangleF r = new RectangleF(0.5f, 0.5f, Width - 1.5f, Height - 1.5f);
+            using (GraphicsPath p = Gfx.Round(r, 9))
+            {
+                using (SolidBrush b = new SolidBrush(f)) g.FillPath(b, p);
+                using (Pen pen = new Pen(Border)) g.DrawPath(pen, p);
+            }
+            StringFormat sf = new StringFormat();
+            sf.Alignment = StringAlignment.Center;
+            sf.LineAlignment = StringAlignment.Center;
+            using (SolidBrush t = new SolidBrush(Fore)) g.DrawString(Text, Font, t, r, sf);
+        }
+    }
+
+    // ---------------- Вікно ----------------
     class MainForm : Form
     {
         Settings settings;
-        ComboBox cbRegion, cbRaion;
-        bool loading = true;
-        Label lblStatus, lblInfo, lblThreats;
-        List<string> threats = new List<string>();
-        DateTime lastThreatFetch = DateTime.MinValue;
-        CheckBox chkSound, chkAutorun;
-        ComboBox cbVoice;
-        Button btnTestAlarm, btnTestClear, btnStop;
+        StatusCard card;
+        ComboBox cbRegion, cbRaion, cbVoice;
+        CheckBox chkSound, chkAutorun, chkPartial;
+        Label lblFooter;
         NotifyIcon tray;
-        System.Windows.Forms.Timer timer;
+        System.Windows.Forms.Timer timer, configTimer;
+        Icon icoRed, icoGreen, icoGray;
         AlertState state = AlertState.Unknown;
-        bool checking = false, firstCheck = true, reallyExit = false, startHidden;
+        List<string> threats = new List<string>();
+        DateTime? since;
+        DateTime? clearedAt;
+        string server = "";
+        bool checking = false, firstCheck = true, reallyExit = false, startHidden, loading = true;
         int requestId = 0;
 
         const string RunKey = @"Software\Microsoft\Windows\CurrentVersion\Run";
@@ -721,39 +977,44 @@ namespace Trevoga
         {
             this.startHidden = startHidden;
             settings = Settings.Load();
+            server = settings.Server.Length > 0 ? settings.Server : AppConfig.Embedded();
 
-            Text = "Тревога — монитор воздушной тревоги";
+            icoRed = Gfx.Dot(Gfx.Red, 32);
+            icoGreen = Gfx.Dot(Gfx.Green, 32);
+            icoGray = Gfx.Dot(Gfx.Gray, 32);
+
+            Text = "Тривога";
             Font = new Font("Segoe UI", 9.75f);
+            AutoScaleMode = AutoScaleMode.Dpi;
+            AutoScaleDimensions = new SizeF(96f, 96f);
             FormBorderStyle = FormBorderStyle.FixedSingle;
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
-            ClientSize = new Size(420, 396);
-            Icon = SystemIcons.Shield;
+            BackColor = Gfx.Bg;
+            ClientSize = new Size(460, 612);
+            Icon = icoGray;
 
-            Label l1 = new Label();
-            l1.Text = "Область:";
-            l1.Location = new Point(14, 17);
-            l1.AutoSize = true;
-            Controls.Add(l1);
+            // --- статус
+            card = new StatusCard();
+            card.Location = new Point(16, 16);
+            card.Size = new Size(428, 178);
+            Controls.Add(card);
 
-            cbRegion = new ComboBox();
-            cbRegion.DropDownStyle = ComboBoxStyle.DropDownList;
-            cbRegion.Location = new Point(85, 13);
-            cbRegion.Width = 320;
+            // --- місце
+            Card place = new Card();
+            place.Caption = "Місце";
+            place.Location = new Point(16, 208);
+            place.Size = new Size(428, 118);
+            Controls.Add(place);
+
+            place.Controls.Add(FieldLabel("Область", 16, 44));
+            cbRegion = Combo(96, 40);
             cbRegion.Items.AddRange(AlertSource.Regions);
-            Controls.Add(cbRegion);
+            place.Controls.Add(cbRegion);
 
-            Label l2 = new Label();
-            l2.Text = "Район:";
-            l2.Location = new Point(14, 51);
-            l2.AutoSize = true;
-            Controls.Add(l2);
-
-            cbRaion = new ComboBox();
-            cbRaion.DropDownStyle = ComboBoxStyle.DropDownList;
-            cbRaion.Location = new Point(85, 47);
-            cbRaion.Width = 320;
-            Controls.Add(cbRaion);
+            place.Controls.Add(FieldLabel("Район", 16, 80));
+            cbRaion = Combo(96, 76);
+            place.Controls.Add(cbRaion);
 
             int idx = Array.IndexOf(AlertSource.Regions, settings.Region);
             cbRegion.SelectedIndex = idx >= 0 ? idx : 9;
@@ -776,61 +1037,16 @@ namespace Trevoga
                 SettingsChanged();
             };
 
-            lblStatus = new Label();
-            lblStatus.Location = new Point(14, 84);
-            lblStatus.Size = new Size(392, 80);
-            lblStatus.TextAlign = ContentAlignment.MiddleCenter;
-            lblStatus.Font = new Font("Segoe UI", 20f, FontStyle.Bold);
-            lblStatus.ForeColor = Color.White;
-            lblStatus.BackColor = Color.Gray;
-            lblStatus.Text = "Проверка…";
-            Controls.Add(lblStatus);
+            // --- сповіщення
+            Card notif = new Card();
+            notif.Caption = "Сповіщення";
+            notif.Location = new Point(16, 340);
+            notif.Size = new Size(428, 166);
+            Controls.Add(notif);
 
-            lblThreats = new Label();
-            lblThreats.Location = new Point(14, 166);
-            lblThreats.Size = new Size(392, 26);
-            lblThreats.TextAlign = ContentAlignment.MiddleCenter;
-            lblThreats.Font = new Font("Segoe UI", 11f, FontStyle.Bold);
-            lblThreats.ForeColor = Color.FromArgb(170, 20, 20);
-            Controls.Add(lblThreats);
-
-            lblInfo = new Label();
-            lblInfo.Location = new Point(14, 197);
-            lblInfo.Size = new Size(392, 36);
-            lblInfo.ForeColor = Color.DimGray;
-            Controls.Add(lblInfo);
-
-            chkSound = new CheckBox();
-            chkSound.Text = "Звук включён";
-            chkSound.Location = new Point(14, 240);
-            chkSound.AutoSize = true;
-            chkSound.Checked = settings.Sound;
-            chkSound.CheckedChanged += delegate
-            {
-                settings.Sound = chkSound.Checked;
-                settings.Save();
-                if (!settings.Sound) Sounds.Stop();
-            };
-            Controls.Add(chkSound);
-
-            chkAutorun = new CheckBox();
-            chkAutorun.Text = "Запускать вместе с Windows";
-            chkAutorun.Location = new Point(185, 240);
-            chkAutorun.AutoSize = true;
-            chkAutorun.Checked = IsAutorun();
-            chkAutorun.CheckedChanged += delegate { SetAutorun(chkAutorun.Checked); };
-            Controls.Add(chkAutorun);
-
-            Label lv = new Label();
-            lv.Text = "Голос:";
-            lv.Location = new Point(14, 276);
-            lv.AutoSize = true;
-            Controls.Add(lv);
-            cbVoice = new ComboBox();
-            cbVoice.DropDownStyle = ComboBoxStyle.DropDownList;
-            cbVoice.Location = new Point(85, 272);
-            cbVoice.Width = 320;
-            cbVoice.Items.AddRange(new object[] { "Жіночий (Тетяна)", "Чоловічий (Микита)", "Без голосу, тільки сирена" });
+            notif.Controls.Add(FieldLabel("Голос", 16, 44));
+            cbVoice = Combo(96, 40);
+            cbVoice.Items.AddRange(new object[] { "Жіночий (Тетяна)", "Чоловічий (Микита)", "Без голосу, лише сирена" });
             cbVoice.SelectedIndex = settings.Voice == "mykyta" ? 1 : settings.Voice == "off" ? 2 : 0;
             Sounds.Voice = settings.Voice;
             cbVoice.SelectedIndexChanged += delegate
@@ -839,32 +1055,56 @@ namespace Trevoga
                 Sounds.Voice = settings.Voice;
                 settings.Save();
             };
-            Controls.Add(cbVoice);
+            notif.Controls.Add(cbVoice);
 
-            btnTestAlarm = MakeButton("Тест тревоги", 14, 308);
-            btnTestAlarm.Click += delegate { Sounds.Alarm(threats.Count > 0 ? threats : new List<string>(new string[] { "drones" })); };
-            btnTestClear = MakeButton("Тест отбоя", 148, 308);
-            btnTestClear.Click += delegate { Sounds.Clear(); };
-            btnStop = MakeButton("Стоп звук", 282, 308);
-            btnStop.Click += delegate { Sounds.Stop(); };
+            chkSound = Check("Звук увімкнено", 16, 78, settings.Sound);
+            chkSound.CheckedChanged += delegate
+            {
+                settings.Sound = chkSound.Checked;
+                settings.Save();
+                if (!settings.Sound) Sounds.Stop();
+            };
+            notif.Controls.Add(chkSound);
 
-            Label hint = new Label();
-            hint.Text = "Крестик сворачивает программу к часам. Выход — правый клик по значку.";
-            hint.Location = new Point(14, 351);
-            hint.Size = new Size(392, 36);
-            hint.ForeColor = Color.Gray;
-            Controls.Add(hint);
+            chkAutorun = Check("Запускати разом з Windows", 16, 104, IsAutorun());
+            chkAutorun.CheckedChanged += delegate { SetAutorun(chkAutorun.Checked); };
+            notif.Controls.Add(chkAutorun);
 
-            // Значок в трее
+            chkPartial = Check("Сповіщати й про тривогу в окремих громадах", 16, 130, settings.Partial);
+            chkPartial.CheckedChanged += delegate
+            {
+                settings.Partial = chkPartial.Checked;
+                SettingsChanged();
+            };
+            notif.Controls.Add(chkPartial);
+
+            // --- кнопки
+            FlatBtn bAlarm = Button("Тест тривоги", 16, 520, 136);
+            bAlarm.Click += delegate { Sounds.Alarm(threats.Count > 0 ? threats : new List<string>(new string[] { "drones" })); };
+            FlatBtn bClear = Button("Тест відбою", 162, 520, 136);
+            bClear.Click += delegate { Sounds.Clear(); };
+            FlatBtn bStop = Button("Тиша", 308, 520, 136);
+            bStop.Fill = Gfx.Text; bStop.Fore = Color.White; bStop.Border = Gfx.Text;
+            bStop.Click += delegate { Sounds.Stop(); };
+
+            lblFooter = new Label();
+            lblFooter.Location = new Point(16, 566);
+            lblFooter.Size = new Size(428, 40);
+            lblFooter.ForeColor = Gfx.Muted;
+            lblFooter.Font = new Font("Segoe UI", 8.5f);
+            lblFooter.Text = "Хрестик ховає програму до годинника. Вихід — правою кнопкою на значку.";
+            Controls.Add(lblFooter);
+
+            // --- трей
             ContextMenu menu = new ContextMenu();
-            menu.MenuItems.Add("Открыть", delegate { ShowWindow(); });
-            menu.MenuItems.Add("Проверить сейчас", delegate { CheckNow(); });
-            menu.MenuItems.Add("Стоп звук", delegate { Sounds.Stop(); });
+            menu.MenuItems.Add("Відкрити", delegate { ShowWindow(); });
+            menu.MenuItems.Add("Перевірити зараз", delegate { CheckNow(); });
+            menu.MenuItems.Add("Тиша", delegate { Sounds.Stop(); });
             menu.MenuItems.Add("-");
-            menu.MenuItems.Add("Выход", delegate { reallyExit = true; Close(); });
+            menu.MenuItems.Add("Вихід", delegate { reallyExit = true; Close(); });
             tray = new NotifyIcon();
-            tray.Icon = SystemIcons.Shield;
-            tray.Text = "Тревога: проверка…";
+            tray.Icon = icoGray;
+            tray.Text = "Тривога: перевірка…";
             tray.ContextMenu = menu;
             tray.Visible = true;
             tray.DoubleClick += delegate { ShowWindow(); };
@@ -876,8 +1116,60 @@ namespace Trevoga
             timer.Tick += delegate { CheckNow(); };
             timer.Start();
 
-            settings.Save();   // создаёт trevoga.ini при первом запуске
+            // адресу сервера оновлюємо з GitHub при запуску і раз на 6 годин
+            configTimer = new System.Windows.Forms.Timer();
+            configTimer.Interval = 6 * 3600 * 1000;
+            configTimer.Tick += delegate { RefreshConfig(); };
+            configTimer.Start();
+
+            UpdateCard();
+            settings.Save();
             loading = false;
+        }
+
+        Label FieldLabel(string text, int x, int y)
+        {
+            Label l = new Label();
+            l.Text = text;
+            l.Location = new Point(x, y);
+            l.AutoSize = true;
+            l.ForeColor = Gfx.Text;
+            l.BackColor = Color.White;
+            return l;
+        }
+
+        ComboBox Combo(int x, int y)
+        {
+            ComboBox c = new ComboBox();
+            c.DropDownStyle = ComboBoxStyle.DropDownList;
+            c.FlatStyle = FlatStyle.Flat;
+            c.BackColor = Color.White;
+            c.Location = new Point(x, y);
+            c.Width = 316;
+            c.MaxDropDownItems = 14;
+            return c;
+        }
+
+        CheckBox Check(string text, int x, int y, bool value)
+        {
+            CheckBox c = new CheckBox();
+            c.Text = text;
+            c.Location = new Point(x, y);
+            c.AutoSize = true;
+            c.Checked = value;
+            c.BackColor = Color.White;
+            c.ForeColor = Gfx.Text;
+            return c;
+        }
+
+        FlatBtn Button(string text, int x, int y, int w)
+        {
+            FlatBtn b = new FlatBtn();
+            b.Text = text;
+            b.Location = new Point(x, y);
+            b.Size = new Size(w, 38);
+            Controls.Add(b);
+            return b;
         }
 
         class RaionItem
@@ -913,26 +1205,39 @@ namespace Trevoga
             state = AlertState.Unknown;
             firstCheck = true;
             threats = new List<string>();
-            lastThreatFetch = DateTime.MinValue;
-            requestId++;          // ответ на старый запрос (другая область) не применяем
+            since = null;
+            clearedAt = null;
+            requestId++;          // відповідь на старий запит (інше місце) не застосовуємо
             checking = false;
+            UpdateCard();
             CheckNow();
         }
 
         string PlaceName()
         {
             string r = settings.Raion != 0 ? AlertSource.RaionName(settings.Raion) : null;
-            return r != null ? r + " (" + settings.Region + ")" : settings.Region;
+            return r != null ? r + ", " + settings.Region : settings.Region;
         }
 
-        Button MakeButton(string text, int x, int y)
+        void RefreshConfig()
         {
-            Button b = new Button();
-            b.Text = text;
-            b.Location = new Point(x, y);
-            b.Size = new Size(124, 32);
-            Controls.Add(b);
-            return b;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string s = AppConfig.Fetch();
+                if (string.IsNullOrEmpty(s)) return;
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (s == server) return;
+                        server = s;
+                        settings.Server = s;
+                        settings.Save();
+                        CheckNow();
+                    });
+                }
+                catch { }
+            });
         }
 
         protected override void SetVisibleCore(bool value)
@@ -945,16 +1250,10 @@ namespace Trevoga
             base.SetVisibleCore(value);
         }
 
-        protected override void OnShown(EventArgs e)
-        {
-            base.OnShown(e);
-            CheckNow();
-        }
-
         protected override void OnHandleCreated(EventArgs e)
         {
             base.OnHandleCreated(e);
-            if (startHidden) BeginInvoke((MethodInvoker)delegate { CheckNow(); });
+            BeginInvoke((MethodInvoker)delegate { RefreshConfig(); CheckNow(); });
         }
 
         void ShowWindow()
@@ -971,10 +1270,11 @@ namespace Trevoga
             {
                 e.Cancel = true;
                 Hide();
-                tray.ShowBalloonTip(3000, "Тревога", "Программа продолжает следить за тревогой.", ToolTipIcon.Info);
+                tray.ShowBalloonTip(3000, "Тривога", "Програма далі стежить за тривогою.", ToolTipIcon.Info);
                 return;
             }
             timer.Stop();
+            configTimer.Stop();
             Sounds.Stop();
             tray.Visible = false;
             tray.Dispose();
@@ -987,115 +1287,146 @@ namespace Trevoga
             checking = true;
             int myId = ++requestId;
             Settings snapshot = settings;
-            bool wasAlert = state == AlertState.Alert;
-            bool threatsDue = (DateTime.Now - lastThreatFetch).TotalSeconds >= 55;
+            string srv = server;
             ThreadPool.QueueUserWorkItem(delegate
             {
-                AlertState result = AlertState.Unknown;
-                string error = null, source = "";
-                List<string> newThreats = null;
-                try { result = AlertSource.Check(snapshot, out source); }
+                CheckResult result = null;
+                string error = null;
+                try { result = AlertSource.Check(snapshot, srv); }
                 catch (Exception ex) { error = ex.Message; }
-                // Типы угроз — только с токеном, только во время тревоги, не чаще раза в минуту (лимиты API)
-                if (error == null && result == AlertState.Alert && !string.IsNullOrEmpty(snapshot.Token) && (!wasAlert || threatsDue))
-                {
-                    try { newThreats = AlertSource.GetThreats(snapshot); } catch { }
-                }
                 try
                 {
                     BeginInvoke((MethodInvoker)delegate
                     {
                         checking = false;
-                        if (myId == requestId) ApplyResult(result, error, source, newThreats);
+                        if (myId == requestId) ApplyResult(result, error);
                     });
                 }
                 catch { checking = false; }
             });
         }
 
-        void ApplyResult(AlertState result, string error, string source, List<string> newThreats)
+        static string Ago(DateTime t)
         {
-            string time = DateTime.Now.ToString("HH:mm:ss");
-            if (error != null)
-            {
-                lblInfo.Text = "Нет связи с сервером (" + time + "): " + error;
-                if (state == AlertState.Unknown)
-                {
-                    lblStatus.BackColor = Color.Gray;
-                    lblStatus.Text = "Нет данных";
-                }
-                tray.Text = Trim63("Тревога: нет связи");
-                return;
-            }
+            TimeSpan d = DateTime.Now - t;
+            if (d.TotalMinutes < 1) return "щойно";
+            if (d.TotalHours < 1) return (int)d.TotalMinutes + " хв";
+            return (int)d.TotalHours + " год " + d.Minutes + " хв";
+        }
 
-            AlertState old = state;
-            state = result;
-            string region = PlaceName();
+        string lastNote = "", lastSource = "", lastTime = "";
 
-            // Угрозы
-            List<string> added = new List<string>();
-            if (state != AlertState.Alert) threats = new List<string>();
-            else if (newThreats != null)
-            {
-                foreach (string t in newThreats) if (!threats.Contains(t)) added.Add(t);
-                threats = newThreats;
-                lastThreatFetch = DateTime.Now;
-            }
-            List<string> titles = new List<string>();
-            foreach (string t in threats) titles.Add(AlertSource.ThreatTitle(t));
-            lblThreats.Text = titles.Count > 0 ? string.Join(" · ", titles.ToArray()) : "";
-            bool ballisticNew = added.Contains("ballistic_missiles");
+        void UpdateCard()
+        {
+            card.Place = PlaceName();
+            card.Chips = new List<string>();
+            card.HotFirstChip = false;
             if (state == AlertState.Alert)
             {
-                lblStatus.BackColor = Color.FromArgb(200, 30, 30);
-                lblStatus.Text = "ПОВІТРЯНА ТРИВОГА";
-                tray.Icon = SystemIcons.Error;
+                bool ballistic = threats.Contains("ballistic_missiles");
+                card.Title = ballistic ? "БАЛІСТИКА!" : "ПОВІТРЯНА ТРИВОГА";
+                card.CardColor = ballistic ? Gfx.DarkRed : Gfx.Red;
+                card.Detail = since.HasValue ? "Триває " + Ago(since.Value) + " · з " + since.Value.ToString("HH:mm") : "Пройдіть в укриття";
+                foreach (string t in threats) card.Chips.Add(AlertSource.ThreatTitle(t));
+                card.HotFirstChip = ballistic;
+            }
+            else if (state == AlertState.Clear)
+            {
+                card.Title = "Тривоги немає";
+                card.CardColor = Gfx.Green;
+                card.Detail = clearedAt.HasValue ? "Відбій о " + clearedAt.Value.ToString("HH:mm") : "Спокійно";
             }
             else
             {
-                lblStatus.BackColor = Color.FromArgb(30, 140, 60);
-                lblStatus.Text = "Тривоги немає";
-                tray.Icon = SystemIcons.Shield;
+                card.Title = lastNote.StartsWith("!") ? "Немає зв'язку" : "Перевірка…";
+                card.CardColor = Gfx.Gray;
+                card.Detail = lastNote.StartsWith("!") ? lastNote.Substring(1) : "";
             }
-            lblInfo.Text = region + " · проверено в " + time + " · источник: " + source;
-            tray.Text = Trim63((state == AlertState.Alert ? "ТРЕВОГА: " : "Нет тревоги: ") + region);
+            card.Invalidate();
+
+            string foot = lastTime.Length > 0 ? "Оновлено о " + lastTime + " · " + lastSource : "";
+            if (lastNote.Length > 0 && !lastNote.StartsWith("!")) foot += (foot.Length > 0 ? " · " : "") + lastNote;
+            if (lastNote.StartsWith("!") && state != AlertState.Unknown) foot += " · немає зв'язку: " + lastNote.Substring(1);
+            lblFooter.Text = (foot.Length > 0 ? foot + "\n" : "") + "Хрестик ховає програму до годинника. Вихід — правою кнопкою на значку.";
+
+            Icon ic = state == AlertState.Alert ? icoRed : state == AlertState.Clear ? icoGreen : icoGray;
+            tray.Icon = ic;
+            Icon = ic;
+            string tip = (state == AlertState.Alert ? "ТРИВОГА: " : state == AlertState.Clear ? "Тривоги немає: " : "Тривога: ") + PlaceName();
+            tray.Text = tip.Length > 63 ? tip.Substring(0, 63) : tip;
+        }
+
+        void ApplyResult(CheckResult r, string error)
+        {
+            if (error != null || r == null)
+            {
+                lastNote = "!" + (error ?? "помилка");
+                UpdateCard();
+                return;
+            }
+            lastNote = r.Note;
+            lastSource = r.Source;
+            lastTime = DateTime.Now.ToString("HH:mm:ss");
+
+            AlertState old = state;
+            List<string> oldThreats = threats;
+            state = r.State;
+            threats = r.Threats;
+            if (state == AlertState.Alert)
+            {
+                if (r.Since.HasValue) since = r.Since;
+                else if (old != AlertState.Alert) since = firstCheck ? (DateTime?)null : DateTime.Now;
+                clearedAt = null;
+            }
+            else
+            {
+                since = null;
+                if (old == AlertState.Alert) clearedAt = DateTime.Now;
+            }
+            UpdateCard();
+
+            string place = PlaceName();
+            List<string> titles = new List<string>();
+            foreach (string t in threats) titles.Add(AlertSource.ThreatTitle(t));
+            string th = string.Join(", ", titles.ToArray());
 
             if (firstCheck)
             {
                 firstCheck = false;
                 if (state == AlertState.Alert)
-                    tray.ShowBalloonTip(5000, "Повітряна тривога", "Сейчас действует тревога: " + region
-                        + (titles.Count > 0 ? "\n" + lblThreats.Text : ""), ToolTipIcon.Warning);
+                    tray.ShowBalloonTip(5000, "Повітряна тривога", "Зараз триває тривога: " + place
+                        + (th.Length > 0 ? "\n" + th : ""), ToolTipIcon.Warning);
                 return;
             }
 
-            if (ballisticNew)
+            List<string> added = new List<string>();
+            if (state == AlertState.Alert)
+                foreach (string t in threats) if (!oldThreats.Contains(t)) added.Add(t);
+
+            if (added.Contains("ballistic_missiles"))
             {
-                // Балістика — самое срочное: отдельный сигнал, даже если тревога уже идёт
-                if (settings.Sound) Sounds.Ballistic(old == AlertState.Clear, threats);
-                tray.ShowBalloonTip(10000, "БАЛІСТИКА!", region + ". Негайно в укриття!", ToolTipIcon.Error);
+                if (settings.Sound) Sounds.Ballistic(old != AlertState.Alert, threats);
+                tray.ShowBalloonTip(10000, "БАЛІСТИКА!", place + ". Негайно в укриття!", ToolTipIcon.Error);
             }
-            else if (old == AlertState.Clear && state == AlertState.Alert)
+            else if (old != AlertState.Alert && state == AlertState.Alert)
             {
                 if (settings.Sound) Sounds.Alarm(threats);
-                tray.ShowBalloonTip(10000, "ПОВІТРЯНА ТРИВОГА!", region + ". Пройдите в укрытие!"
-                    + (titles.Count > 0 ? "\n" + lblThreats.Text : ""), ToolTipIcon.Error);
+                tray.ShowBalloonTip(10000, "ПОВІТРЯНА ТРИВОГА!", place + ". Пройдіть в укриття!"
+                    + (th.Length > 0 ? "\n" + th : ""), ToolTipIcon.Error);
             }
-            else if (state == AlertState.Alert && added.Count > 0 && old == AlertState.Alert)
+            else if (old == AlertState.Alert && state == AlertState.Alert && added.Count > 0)
             {
-                List<string> addTitles = new List<string>();
-                foreach (string t in added) addTitles.Add(AlertSource.ThreatTitle(t));
                 if (settings.Sound) Sounds.NewThreats(added);
-                tray.ShowBalloonTip(8000, "Нова загроза", region + ": " + string.Join(", ", addTitles.ToArray()), ToolTipIcon.Warning);
+                List<string> at = new List<string>();
+                foreach (string t in added) at.Add(AlertSource.ThreatTitle(t));
+                tray.ShowBalloonTip(8000, "Нова загроза", place + ": " + string.Join(", ", at.ToArray()), ToolTipIcon.Warning);
             }
             else if (old == AlertState.Alert && state == AlertState.Clear)
             {
                 if (settings.Sound) Sounds.Clear();
-                tray.ShowBalloonTip(10000, "Відбій тривоги", region, ToolTipIcon.Info);
+                tray.ShowBalloonTip(10000, "Відбій тривоги", place, ToolTipIcon.Info);
             }
         }
-
-        static string Trim63(string s) { return s.Length > 63 ? s.Substring(0, 63) : s; }
 
         static bool IsAutorun()
         {
@@ -1120,7 +1451,7 @@ namespace Trevoga
             }
             catch (Exception ex)
             {
-                MessageBox.Show("Не удалось изменить автозапуск: " + ex.Message, "Тревога");
+                MessageBox.Show("Не вдалося змінити автозапуск: " + ex.Message, "Тривога");
             }
         }
     }

@@ -19,7 +19,7 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-/** Фоновый сервис: раз в 20 секунд проверяет тревогу и играет звук при смене статуса. */
+/** Фоновий сервіс: раз на 20 секунд перевіряє тривогу і грає звук при зміні статусу. */
 public class MonitorService extends Service {
     static final int INTERVAL_MS = 20000;
     static final int NOTIF_STATUS = 1, NOTIF_ALERT = 2;
@@ -31,7 +31,6 @@ public class MonitorService extends Service {
     private PowerManager.WakeLock wakeLock;
     private String lastPlace = null;
     private boolean firstCheck = true;
-    private long lastThreatFetch = 0;
 
     static void start(Context c) {
         c.startService(new Intent(c, MonitorService.class));
@@ -45,7 +44,7 @@ public class MonitorService extends Service {
     public void onCreate() {
         super.onCreate();
         Prefs.createChannels(this);
-        startForeground(NOTIF_STATUS, statusNotification("Проверка…"));
+        startForeground(NOTIF_STATUS, statusNotification("Перевірка…"));
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "trevoga:monitor");
         wakeLock.acquire();
@@ -78,69 +77,82 @@ public class MonitorService extends Service {
         }
     };
 
+    private void refreshConfigIfDue() {
+        SharedPreferences p = Prefs.get(this);
+        long last = p.getLong(Prefs.CONFIG_AT, 0);
+        if (System.currentTimeMillis() - last < 6 * 3600 * 1000L) return;
+        p.edit().putLong(Prefs.CONFIG_AT, System.currentTimeMillis()).apply();
+        String s = AlertSource.fetchServer();
+        if (s != null) p.edit().putString(Prefs.SERVER, s).apply();
+    }
+
     private void checkOnce() {
+        refreshConfigIfDue();
         SharedPreferences p = Prefs.get(this);
         String region = Prefs.region(this);
         int raion = Prefs.raion(this);
-        String place = region + "|" + raion;
-        String token = p.getString(Prefs.TOKEN, "");
         boolean partial = p.getBoolean(Prefs.PARTIAL, false);
+        String place = region + "|" + raion + "|" + partial;
         if (!place.equals(lastPlace)) {
             lastPlace = place;
             firstCheck = true;
-            lastThreatFetch = 0;
-            p.edit().remove(Prefs.THREATS).apply();
+            p.edit().remove(Prefs.THREATS).remove(Prefs.SINCE).remove(Prefs.CLEARED_AT).apply();
         }
         String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
 
-        int result;
+        AlertSource.Result r;
         try {
-            result = AlertSource.check(region, raion, token, partial);
+            r = AlertSource.check(AlertSource.server(this), region, raion, partial);
         } catch (Exception e) {
-            p.edit().putString(Prefs.ERROR, "Нет связи (" + time + "): " + e.getMessage()).apply();
+            p.edit().putString(Prefs.ERROR, e.getMessage()).apply();
             updateStatus(p.getInt(Prefs.STATE, AlertSource.UNKNOWN), Prefs.place(this), true);
             return;
         }
+        if (!place.equals(Prefs.region(this) + "|" + Prefs.raion(this) + "|" + p.getBoolean(Prefs.PARTIAL, false)))
+            return; // місце змінили під час запиту
 
-        // Типы угроз — только с токеном, во время тревоги, не чаще раза в минуту (лимиты API)
-        int prevState = firstCheck ? AlertSource.UNKNOWN : p.getInt(Prefs.STATE, AlertSource.UNKNOWN);
+        int old = firstCheck ? AlertSource.UNKNOWN : p.getInt(Prefs.STATE, AlertSource.UNKNOWN);
         List<String> oldThreats = parseList(p.getString(Prefs.THREATS, ""));
-        List<String> threats = oldThreats;
+        List<String> threats = r.threats;
         List<String> added = new ArrayList<String>();
-        if (result != AlertSource.ALERT) threats = new ArrayList<String>();
-        else if (token.trim().length() > 0
-                && (prevState != AlertSource.ALERT || System.currentTimeMillis() - lastThreatFetch > 55000)) {
-            try {
-                threats = AlertSource.getThreats(region, raion, token);
-                lastThreatFetch = System.currentTimeMillis();
-                for (String t : threats) if (!oldThreats.contains(t)) added.add(t);
-            } catch (Exception ignored) { }
+        if (r.state == AlertSource.ALERT) for (String t : threats) if (!oldThreats.contains(t)) added.add(t);
+
+        long since = p.getLong(Prefs.SINCE, 0);
+        long clearedAt = p.getLong(Prefs.CLEARED_AT, 0);
+        long now = System.currentTimeMillis();
+        if (r.state == AlertSource.ALERT) {
+            if (r.since > 0) since = r.since;
+            else if (old != AlertSource.ALERT) since = firstCheck ? 0 : now;
+            clearedAt = 0;
+        } else {
+            since = 0;
+            if (old == AlertSource.ALERT) clearedAt = now;
         }
 
-        if (!place.equals(Prefs.region(this) + "|" + Prefs.raion(this))) return; // место сменили во время запроса
-        region = Prefs.place(this);
-        int old = firstCheck ? AlertSource.UNKNOWN : p.getInt(Prefs.STATE, AlertSource.UNKNOWN);
-        p.edit().putInt(Prefs.STATE, result).putString(Prefs.STATUS_TIME, time).putString(Prefs.THREATS, join(threats))
-                .putString(Prefs.SOURCE, AlertSource.lastSource).remove(Prefs.ERROR).apply();
-        updateStatus(result, region, false);
+        p.edit().putInt(Prefs.STATE, r.state).putString(Prefs.STATUS_TIME, time).putString(Prefs.THREATS, join(threats))
+                .putString(Prefs.SOURCE, r.source).putString(Prefs.NOTE, r.note)
+                .putLong(Prefs.SINCE, since).putLong(Prefs.CLEARED_AT, clearedAt)
+                .remove(Prefs.ERROR).apply();
+        String placeName = Prefs.place(this);
+        updateStatus(r.state, placeName, false);
         String th = AlertSource.titles(threats);
 
         if (firstCheck) {
             firstCheck = false;
-            return; // при запуске звук не играем, только показываем статус
+            return; // при запуску звук не граємо, лише показуємо статус
         }
         if (added.contains("ballistic_missiles")) {
-            Sounds.ballistic(this, old == AlertSource.CLEAR, threats);                    // балістика — отдельный срочный сигнал
-            alertNotification("БАЛІСТИКА!", region + ". Негайно в укриття!");
-        } else if (old == AlertSource.CLEAR && result == AlertSource.ALERT) {
+            Sounds.ballistic(this, old != AlertSource.ALERT, threats);      // балістика — окремий терміновий сигнал
+            alertNotification("БАЛІСТИКА!", placeName + ". Негайно в укриття!");
+        } else if (old != AlertSource.ALERT && r.state == AlertSource.ALERT) {
             Sounds.alarm(this, threats);
-            alertNotification("ПОВІТРЯНА ТРИВОГА!", region + ". Пройдіть в укриття!" + (th.length() > 0 ? "\n" + th : ""));
-        } else if (old == AlertSource.ALERT && result == AlertSource.ALERT && !added.isEmpty()) {
+            alertNotification("ПОВІТРЯНА ТРИВОГА!", placeName + ". Пройдіть в укриття!" + (th.length() > 0 ? "\n" + th : ""));
+        } else if (old == AlertSource.ALERT && r.state == AlertSource.ALERT && !added.isEmpty()) {
             Sounds.newThreats(this, added);
-            alertNotification("Нова загроза", region + ": " + AlertSource.titles(added));
-        } else if (old == AlertSource.ALERT && result == AlertSource.CLEAR) {
+            alertNotification("Нова загроза", placeName + ": " + AlertSource.titles(added));
+        } else if (old == AlertSource.ALERT && r.state == AlertSource.CLEAR) {
             Sounds.clear(this);
-            alertNotification("Відбій тривоги", region);
+            alertNotification("Відбій тривоги", placeName);
         }
     }
 
@@ -175,7 +187,7 @@ public class MonitorService extends Service {
     private Notification statusNotification(String text) {
         return Prefs.builder(this, Prefs.CH_STATUS)
                 .setSmallIcon(R.drawable.ic_launcher)
-                .setContentTitle("Тривога: слежение включено")
+                .setContentTitle("Тривога: стежу")
                 .setContentText(text)
                 .setOngoing(true)
                 .setPriority(Notification.PRIORITY_LOW)

@@ -4,6 +4,8 @@ set -e
 cd "$(dirname "$0")"
 SDK=/usr/lib/android-sdk/platforms/android-23/android.jar
 rm -rf build && mkdir -p build/gen build/classes
+# адреса сервера: вшиваємо поточний config.json з кореня репозиторію
+mkdir -p res/raw && cp ../config.json res/raw/config.json
 aapt package -f -m -J build/gen -M AndroidManifest.xml -S res -I "$SDK" -F build/unsigned.apk
 javac --release 8 -nowarn -encoding UTF-8 -classpath "$SDK" -d build/classes build/gen/ua/spokiy/trevoga/R.java src/ua/spokiy/trevoga/*.java
 dalvik-exchange --dex --min-sdk-version=21 --output=build/classes.dex build/classes
