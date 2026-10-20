@@ -116,6 +116,8 @@ export class AlertsHub {
         ok: !!(this.fresh(this.ain, now) || this.fresh(this.nep, now)),
         service: "trevoga",
         token_set: !!this.env.ALERTS_TOKEN,
+        neptun_fields: this.nepKeys || null,
+        neptun_sample: this.nepSample || null,
         sources: {
           alerts_in_ua: { ok: !!this.fresh(this.ain, now), age_s: this.ain.okAt ? Math.round((now - this.ain.okAt) / 1000) : null, error: this.ain.err },
           neptun: { ok: !!this.fresh(this.nep, now), age_s: this.nep.okAt ? Math.round((now - this.nep.okAt) / 1000) : null, error: this.nep.err },
@@ -181,6 +183,7 @@ export class AlertsHub {
         u: toInt(a.location_uid),
         o: toInt(a.location_oblast_uid),
         r: a.location_raion || null,
+        on: a.location_oblast || null,   // назва області (location_oblast_uid у районних тривог буває некоректним)
         s: a.started_at || null,
         l: a.alert_level || null,     // рівень: "red" | "yellow"
         t,
@@ -201,11 +204,17 @@ export class AlertsHub {
     const raions = Array.isArray(j.raions) ? j.raions : [];
     const oblasts = Array.isArray(j.oblasts) ? j.oblasts : [];
     if (!Array.isArray(j.raions) && !Array.isArray(j.oblasts)) throw new Error("NEPTUN: неочікуваний формат");
+    const lvl = (x) => {
+      const v = x.level ?? x.alertLevel ?? x.alert_level ?? x.threatLevel ?? x.severity ?? x.color ?? null;
+      return typeof v === "string" ? v.toLowerCase() : v;
+    };
+    this.nepKeys = raions[0] ? Object.keys(raions[0]) : oblasts[0] ? Object.keys(oblasts[0]) : [];
+    this.nepSample = raions[0] || oblasts[0] || null;
     return {
-      // [область, район, початок]
-      r: raions.map((x) => [x.oblast || "", x.name || "", x.since || null]),
-      // [область, початок]
-      o: oblasts.map((x) => [x.name || "", x.since || null]),
+      // [область, район, початок, рівень]
+      r: raions.map((x) => [x.oblast || "", x.name || "", x.since || null, lvl(x)]),
+      // [область, початок, рівень]
+      o: oblasts.map((x) => [x.name || "", x.since || null, lvl(x)]),
     };
   }
 
