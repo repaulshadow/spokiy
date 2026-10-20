@@ -58,8 +58,8 @@ final class AlertSource {
 
     static String download(String url) throws Exception {
         HttpURLConnection c = (HttpURLConnection) new URL(url).openConnection();
-        c.setConnectTimeout(15000);
-        c.setReadTimeout(15000);
+        c.setConnectTimeout(10000);
+        c.setReadTimeout(10000);
         c.setUseCaches(false);
         c.setRequestProperty("User-Agent", "Trevoga-Android/2.0");
         c.setRequestProperty("Accept", "application/json");
@@ -183,8 +183,16 @@ final class AlertSource {
         String serverError = null;
         if (server != null && server.length() > 0) {
             try { return fromServer(server, region, raion, partial); }
-            catch (Exception e) { serverError = e.getMessage(); }
+            catch (Exception e) { serverError = shortErr(e); }
         }
+        // Запасний шлях 1: NEPTUN напряму (дані по районах, без ключа)
+        try {
+            Result n = fromNeptunDirect(region, raion, partial);
+            n.note = (serverError != null ? "сервер недоступний (" + serverError + ")" : "сервер ще не налаштовано")
+                    + (n.note.length() > 0 ? " · " + n.note : "");
+            return n;
+        } catch (Exception ignored) { }
+        // Запасний шлях 2: ubilling.net.ua (лише області)
         Result r = fromUbilling(region);
         if (raion != 0) {
             // Обрано район: дані по всій області сигналу не дають — лише для довідки
@@ -192,12 +200,50 @@ final class AlertSource {
             r.state = UNKNOWN;
             r.threats.clear();
             r.since = 0;
-            r.note = (serverError != null || (server != null && server.length() > 0) ? "сервер недоступний" : "сервер ще не налаштовано")
+            r.note = (serverError != null ? "сервер і NEPTUN недоступні" : "NEPTUN недоступний")
                     + " · в області зараз " + (oblAlert ? "тривога" : "тиша");
             return r;
         }
-        if (serverError != null) r.note = "сервер недоступний";
+        if (serverError != null) r.note = "сервер недоступний (" + serverError + ")";
         return r;
+    }
+
+    static String shortErr(Exception e) {
+        String m = e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
+        m = m.replace('\n', ' ');
+        return m.length() > 60 ? m.substring(0, 60) + "…" : m;
+    }
+
+    static String NEPTUN_BASE = "https://neptun.in.ua";
+
+    /** NEPTUN напряму: перетворюємо їхню відповідь у формат нашого сервера і розбираємо тим самим кодом. */
+    static Result fromNeptunDirect(String region, int raion, boolean partial) throws Exception {
+        JSONObject j = new JSONObject(download(NEPTUN_BASE + "/api/v1/alerts"));
+        JSONArray rs = j.optJSONArray("raions"), os = j.optJSONArray("oblasts");
+        if (rs == null && os == null) throw new Exception("NEPTUN: неочікувана відповідь");
+        JSONArray r = new JSONArray(), o = new JSONArray();
+        if (rs != null) for (int i = 0; i < rs.length(); i++) {
+            JSONObject x = rs.optJSONObject(i);
+            if (x == null) continue;
+            JSONArray e = new JSONArray();
+            e.put(x.optString("oblast", "")); e.put(x.optString("name", "")); e.put(x.optString("since", ""));
+            r.put(e);
+        }
+        if (os != null) for (int i = 0; i < os.length(); i++) {
+            JSONObject x = os.optJSONObject(i);
+            if (x == null) continue;
+            JSONArray e = new JSONArray();
+            e.put(x.optString("name", "")); e.put(x.optString("since", ""));
+            o.put(e);
+        }
+        JSONObject nep = new JSONObject();
+        nep.put("r", r);
+        nep.put("o", o);
+        JSONObject root = new JSONObject();
+        root.put("neptun", nep);
+        Result res = fromRoot(root, region, raion, partial);
+        res.source = "NEPTUN напряму";
+        return res;
     }
 
     /** Нормалізація назв для порівняння з NEPTUN: апостроф, «м.», Крим. */
@@ -214,9 +260,12 @@ final class AlertSource {
     }
 
     static Result fromServer(String server, String region, int raion, boolean partial) throws Exception {
+        return fromRoot(new JSONObject(download(server + "/status")), region, raion, partial);
+    }
+
+    static Result fromRoot(JSONObject root, String region, int raion, boolean partial) throws Exception {
         int obl = Locations.oblastUid(region);
         if (obl < 0) throw new Exception("невідома область");
-        JSONObject root = new JSONObject(download(server + "/status"));
         String air = root.isNull("air") ? null : root.optString("air", null);
         JSONObject nep = root.optJSONObject("neptun");
         if (air == null && nep == null) throw new Exception("сервер без даних");

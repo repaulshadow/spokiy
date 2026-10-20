@@ -20,7 +20,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("2.5.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.6.0.0")]
 
 namespace Trevoga
 {
@@ -290,8 +290,8 @@ namespace Trevoga
         public static string Download(string url)
         {
             HttpWebRequest req = (HttpWebRequest)WebRequest.Create(url);
-            req.Timeout = 15000;
-            req.ReadWriteTimeout = 15000;
+            req.Timeout = 10000;
+            req.ReadWriteTimeout = 10000;
             req.UserAgent = "Trevoga-Win/2.0";
             req.Accept = "application/json";
             using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse())
@@ -354,8 +354,18 @@ namespace Trevoga
             if (!string.IsNullOrEmpty(server))
             {
                 try { return FromServer(s, server); }
-                catch (Exception ex) { serverError = ex.Message; }
+                catch (Exception ex) { serverError = Short(ex.Message); }
             }
+            // Запасний шлях 1: NEPTUN напряму (дані по районах, без ключа)
+            try
+            {
+                CheckResult n = FromNeptunDirect(s);
+                n.Note = (serverError != null ? "сервер недоступний (" + serverError + ")" : "сервер ще не налаштовано")
+                    + (n.Note.Length > 0 ? " · " + n.Note : "");
+                return n;
+            }
+            catch { }
+            // Запасний шлях 2: ubilling.net.ua (лише області)
             CheckResult r = FromUbilling(s.Region);
             if (s.Raion != 0)
             {
@@ -364,12 +374,59 @@ namespace Trevoga
                 r.State = AlertState.Unknown;
                 r.Threats.Clear();
                 r.Since = null;
-                r.Note = (serverError != null || !string.IsNullOrEmpty(server) ? "сервер недоступний" : "сервер ще не налаштовано")
+                r.Note = (serverError != null ? "сервер і NEPTUN недоступні" : "NEPTUN недоступний")
                     + " · в області зараз " + (oblAlert ? "тривога" : "тиша");
                 return r;
             }
-            if (serverError != null) r.Note = "сервер недоступний";
+            if (serverError != null) r.Note = "сервер недоступний (" + serverError + ")";
             return r;
+        }
+
+        static string Short(string m)
+        {
+            if (string.IsNullOrEmpty(m)) return "помилка";
+            m = m.Replace("\r", " ").Replace("\n", " ");
+            return m.Length > 60 ? m.Substring(0, 60) + "…" : m;
+        }
+
+        // NEPTUN напряму: перетворюємо їхню відповідь у формат нашого сервера і розбираємо тим самим кодом
+        public static string NeptunBase = "https://neptun.in.ua";
+
+        static CheckResult FromNeptunDirect(Settings s)
+        {
+            Dictionary<string, object> j = Json.Parse(Download(NeptunBase + "/api/v1/alerts")) as Dictionary<string, object>;
+            if (j == null) throw new Exception("NEPTUN: неочікувана відповідь");
+            object v;
+            List<object> rs = j.TryGetValue("raions", out v) ? v as List<object> : null;
+            List<object> os = j.TryGetValue("oblasts", out v) ? v as List<object> : null;
+            if (rs == null && os == null) throw new Exception("NEPTUN: неочікувана відповідь");
+            List<object> r = new List<object>(), o = new List<object>();
+            if (rs != null)
+                foreach (object item in rs)
+                {
+                    Dictionary<string, object> x = item as Dictionary<string, object>;
+                    if (x == null) continue;
+                    object a, b, c;
+                    x.TryGetValue("oblast", out a); x.TryGetValue("name", out b); x.TryGetValue("since", out c);
+                    r.Add(new List<object>(new object[] { a, b, c }));
+                }
+            if (os != null)
+                foreach (object item in os)
+                {
+                    Dictionary<string, object> x = item as Dictionary<string, object>;
+                    if (x == null) continue;
+                    object b, c;
+                    x.TryGetValue("name", out b); x.TryGetValue("since", out c);
+                    o.Add(new List<object>(new object[] { b, c }));
+                }
+            Dictionary<string, object> nep = new Dictionary<string, object>();
+            nep["r"] = r;
+            nep["o"] = o;
+            Dictionary<string, object> root = new Dictionary<string, object>();
+            root["neptun"] = nep;
+            CheckResult res = FromRoot(s, root);
+            res.Source = "NEPTUN напряму";
+            return res;
         }
 
         // Нормалізація назв для порівняння з NEPTUN: апостроф, «м.», Крим
@@ -400,10 +457,15 @@ namespace Trevoga
 
         static CheckResult FromServer(Settings s, string server)
         {
-            int obl = OblastUid(s.Region);
-            if (obl < 0) throw new Exception("невідома область");
             Dictionary<string, object> root = Json.Parse(Download(server + "/status")) as Dictionary<string, object>;
             if (root == null) throw new Exception("неочікувана відповідь сервера");
+            return FromRoot(s, root);
+        }
+
+        static CheckResult FromRoot(Settings s, Dictionary<string, object> root)
+        {
+            int obl = OblastUid(s.Region);
+            if (obl < 0) throw new Exception("невідома область");
             object v;
             string air = root.TryGetValue("air", out v) ? v as string : null;
             Dictionary<string, object> nep = root.TryGetValue("neptun", out v) ? v as Dictionary<string, object> : null;
