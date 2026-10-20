@@ -9,7 +9,7 @@ import android.os.Build;
 final class Prefs {
     static final String NAME = "trevoga";
     static final String THREATS = "threats", VOICE = "voice", SERVER = "server", CONFIG_AT = "config_at",
-            SINCE = "since", CLEARED_AT = "cleared_at", NOTE = "note";
+            SINCE = "since", CLEARED_AT = "cleared_at", NOTE = "note", DISAGREE = "disagree";
     static final String RAION = "raion", SOUND_ALARM = "sound_alarm", SOUND_CLEAR = "sound_clear";
     static final String REGION = "region", PARTIAL = "partial", ENABLED = "enabled",
             STATE = "state", STATUS_TIME = "status_time", ERROR = "error", SOURCE = "source",

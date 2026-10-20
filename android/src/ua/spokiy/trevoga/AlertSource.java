@@ -48,6 +48,7 @@ final class AlertSource {
         long since = 0;          // мс, 0 — невідомо
         String source = "";
         String note = "";
+        boolean disagree = false;
     }
 
     static int indexOf(String region) {
@@ -199,45 +200,107 @@ final class AlertSource {
         return r;
     }
 
+    /** Нормалізація назв для порівняння з NEPTUN: апостроф, «м.», Крим. */
+    static String norm(String x) {
+        if (x == null) return "";
+        String t = x.trim().toLowerCase(Locale.ROOT).replace('\u2019', '\'').replace('\u02BC', '\'').replace('`', '\'');
+        if (t.startsWith("м. ")) t = t.substring(3);
+        if (t.equals("ар крим") || t.equals("автономна республіка крим")) t = "крим";
+        return t;
+    }
+
+    private static long earliest(long cur, long t) {
+        return t > 0 && (cur == 0 || t < cur) ? t : cur;
+    }
+
     static Result fromServer(String server, String region, int raion, boolean partial) throws Exception {
         int obl = Locations.oblastUid(region);
         if (obl < 0) throw new Exception("невідома область");
         JSONObject root = new JSONObject(download(server + "/status"));
-        String air = root.optString("air", null);
-        if (air == null) throw new Exception("неочікувана відповідь сервера");
-
-        Result r = new Result();
-        r.source = "сервер";
-        char o = charAt(air, obl);
-        char c = raion != 0 ? charAt(air, raion) : o;
-        if (o == 'A' || c == 'A') r.state = ALERT;
-        else if (c == 'P') r.state = partial ? ALERT : CLEAR;
-        else if (c == 'N') r.state = CLEAR;
-        else throw new Exception("неочікувана відповідь сервера");
+        String air = root.isNull("air") ? null : root.optString("air", null);
+        JSONObject nep = root.optJSONObject("neptun");
+        if (air == null && nep == null) throw new Exception("сервер без даних");
 
         String raionName = raion != 0 ? raionName(raion) : null;
-        JSONArray arr = root.optJSONArray("alerts");
-        if (arr != null) for (int i = 0; i < arr.length(); i++) {
-            JSONObject a = arr.optJSONObject(i);
-            if (a == null) continue;
-            int u = toInt(a.opt("u"));
-            int ao = toInt(a.opt("o"));
-            if (ao != obl && u != obl) continue;
-            if (raion != 0 && u != obl && u != raion) {
-                String rn = a.isNull("r") ? null : a.optString("r", null);
-                if (rn == null || !rn.equals(raionName)) continue;
-            }
-            if (raion == 0 && u != obl && !(partial || o == 'A')) continue;   // лише частина області
-            if (!a.isNull("s")) {
-                long st = parseIso(a.optString("s", ""));
-                if (st > 0 && (r.since == 0 || st < r.since)) r.since = st;
-            }
-            JSONArray t = a.optJSONArray("t");
-            if (t != null) for (int j = 0; j < t.length(); j++) {
-                String ts = t.optString(j, "");
-                if (ts.length() > 0 && !r.threats.contains(ts)) r.threats.add(ts);
+        Result r = new Result();
+        int ain = UNKNOWN, nepState = UNKNOWN;
+        long ainSince = 0, nepSince = 0;
+
+        // --- Джерело 1: alerts.in.ua
+        if (air != null) {
+            try {
+                char o = charAt(air, obl);
+                char c = raion != 0 ? charAt(air, raion) : o;
+                if (o == 'A' || c == 'A') ain = ALERT;
+                else if (c == 'P') ain = partial ? ALERT : CLEAR;
+                else if (c == 'N') ain = CLEAR;
+                JSONArray arr = root.optJSONArray("alerts");
+                if (arr != null) for (int i = 0; i < arr.length(); i++) {
+                    JSONObject a = arr.optJSONObject(i);
+                    if (a == null) continue;
+                    int u = toInt(a.opt("u"));
+                    int ao = toInt(a.opt("o"));
+                    if (ao != obl && u != obl) continue;
+                    if (raion != 0 && u != obl && u != raion) {
+                        String rn = a.isNull("r") ? null : a.optString("r", null);
+                        if (rn == null || !rn.equals(raionName)) continue;
+                    }
+                    if (raion == 0 && u != obl && !(partial || o == 'A')) continue;   // лише частина області
+                    if (!a.isNull("s")) ainSince = earliest(ainSince, parseIso(a.optString("s", "")));
+                    JSONArray t = a.optJSONArray("t");
+                    if (t != null) for (int j = 0; j < t.length(); j++) {
+                        String ts = t.optString(j, "");
+                        if (ts.length() > 0 && !r.threats.contains(ts)) r.threats.add(ts);
+                    }
+                }
+            } catch (Exception e) {
+                ain = UNKNOWN;
             }
         }
+
+        // --- Джерело 2: NEPTUN (офіційні тривоги UkraineAlarm по районах)
+        if (nep != null) {
+            String oblN = norm(region), raionN = norm(raionName);
+            boolean oblWide = false, raionHit = false;
+            int alertedInObl = 0;
+            JSONArray os = nep.optJSONArray("o");
+            if (os != null) for (int i = 0; i < os.length(); i++) {
+                JSONArray e = os.optJSONArray(i);
+                if (e == null || !norm(e.optString(0, "")).equals(oblN)) continue;
+                oblWide = true;
+                nepSince = earliest(nepSince, parseIso(e.optString(1, "")));
+            }
+            JSONArray rs = nep.optJSONArray("r");
+            if (rs != null) for (int i = 0; i < rs.length(); i++) {
+                JSONArray e = rs.optJSONArray(i);
+                if (e == null || !norm(e.optString(0, "")).equals(oblN)) continue;
+                alertedInObl++;
+                boolean mine = raion != 0 && norm(e.optString(1, "")).equals(raionN);
+                if (mine) raionHit = true;
+                if (mine || raion == 0) nepSince = earliest(nepSince, parseIso(e.optString(2, "")));
+            }
+            int raionsInObl = 0;
+            for (int i = 0; i < Locations.RAION_OBLAST.length; i++) if (Locations.RAION_OBLAST[i] == obl) raionsInObl++;
+            boolean allRaions = raionsInObl > 0 && alertedInObl >= raionsInObl;
+            if (raion != 0) nepState = (oblWide || raionHit) ? ALERT : CLEAR;
+            else nepState = (oblWide || allRaions || (partial && alertedInObl > 0)) ? ALERT : CLEAR;
+        }
+
+        if (ain == UNKNOWN && nepState == UNKNOWN) throw new Exception("неочікувана відповідь сервера");
+
+        // --- Зведення: тривога, якщо її показує хоча б одне джерело
+        r.state = (ain == ALERT || nepState == ALERT) ? ALERT : CLEAR;
+        if (ain == ALERT) r.since = earliest(r.since, ainSince);
+        if (nepState == ALERT) r.since = earliest(r.since, nepSince);
+        r.source = ain != UNKNOWN && nepState != UNKNOWN ? "alerts.in.ua + NEPTUN" : ain != UNKNOWN ? "alerts.in.ua" : "NEPTUN";
+        if (ain != UNKNOWN && nepState != UNKNOWN) {
+            if (ain == nepState) r.note = "джерела збігаються";
+            else {
+                r.note = "джерела розходяться: " + (ain == ALERT ? "тривогу показує лише alerts.in.ua" : "тривогу показує лише NEPTUN");
+                r.disagree = true;
+            }
+        }
+
         if (r.state != ALERT) { r.threats.clear(); r.since = 0; }
         Collections.sort(r.threats, new Comparator<String>() {
             public int compare(String x, String y) {

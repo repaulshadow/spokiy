@@ -262,7 +262,8 @@ namespace Trevoga
         public List<string> Threats = new List<string>();
         public DateTime? Since;          // з якого часу триває поточний стан (якщо відомо)
         public string Source = "";
-        public string Note = "";         // пояснення: сервер недоступний, район лише через сервер тощо
+        public string Note = "";         // пояснення: сервер недоступний, збіг джерел тощо
+        public bool Disagree = false;    // джерела показують різне
     }
 
     static class AlertSource
@@ -365,59 +366,140 @@ namespace Trevoga
             return r;
         }
 
+        // Нормалізація назв для порівняння з NEPTUN: апостроф, «м.», Крим
+        public static string Norm(string x)
+        {
+            if (x == null) return "";
+            string t = x.Trim().ToLowerInvariant().Replace('\u2019', '\'').Replace('\u02BC', '\'').Replace('`', '\'');
+            if (t.StartsWith("м. ")) t = t.Substring(3);
+            if (t == "ар крим" || t == "автономна республіка крим") t = "крим";
+            return t;
+        }
+
+        static DateTime? ParseIso(object x)
+        {
+            if (x == null) return null;
+            try
+            {
+                return DateTime.Parse(Convert.ToString(x), System.Globalization.CultureInfo.InvariantCulture,
+                    System.Globalization.DateTimeStyles.RoundtripKind).ToLocalTime();
+            }
+            catch { return null; }
+        }
+
+        static void Earliest(CheckResult r, DateTime? t)
+        {
+            if (t.HasValue && (r.Since == null || t.Value < r.Since.Value)) r.Since = t;
+        }
+
         static CheckResult FromServer(Settings s, string server)
         {
             int obl = OblastUid(s.Region);
             if (obl < 0) throw new Exception("невідома область");
             Dictionary<string, object> root = Json.Parse(Download(server + "/status")) as Dictionary<string, object>;
+            if (root == null) throw new Exception("неочікувана відповідь сервера");
             object v;
-            if (root == null || !root.TryGetValue("air", out v) || !(v is string)) throw new Exception("неочікувана відповідь сервера");
-            string air = (string)v;
-
-            CheckResult r = new CheckResult();
-            r.Source = "сервер";
-            char o = CharAt(air, obl);
-            char c = s.Raion != 0 ? CharAt(air, s.Raion) : o;
-            if (o == 'A' || c == 'A') r.State = AlertState.Alert;
-            else if (c == 'P') r.State = s.Partial ? AlertState.Alert : AlertState.Clear;
-            else if (c == 'N') r.State = AlertState.Clear;
-            else throw new Exception("неочікувана відповідь сервера");
+            string air = root.TryGetValue("air", out v) ? v as string : null;
+            Dictionary<string, object> nep = root.TryGetValue("neptun", out v) ? v as Dictionary<string, object> : null;
+            if (air == null && nep == null) throw new Exception("сервер без даних");
 
             string raionName = s.Raion != 0 ? RaionName(s.Raion) : null;
-            if (root.TryGetValue("alerts", out v) && v is List<object>)
+            CheckResult r = new CheckResult();
+            AlertState ain = AlertState.Unknown, nepState = AlertState.Unknown;
+            CheckResult ainRes = new CheckResult(), nepRes = new CheckResult();
+
+            // --- Джерело 1: alerts.in.ua
+            if (air != null)
             {
-                foreach (object item in (List<object>)v)
+                try
                 {
-                    Dictionary<string, object> a = item as Dictionary<string, object>;
-                    if (a == null) continue;
-                    object x;
-                    int u = a.TryGetValue("u", out x) ? ToInt(x) : -1;
-                    int ao = a.TryGetValue("o", out x) ? ToInt(x) : -1;
-                    if (ao != obl && u != obl) continue;
-                    if (s.Raion != 0 && u != obl && u != s.Raion)
+                    char o = CharAt(air, obl);
+                    char c = s.Raion != 0 ? CharAt(air, s.Raion) : o;
+                    if (o == 'A' || c == 'A') ain = AlertState.Alert;
+                    else if (c == 'P') ain = s.Partial ? AlertState.Alert : AlertState.Clear;
+                    else if (c == 'N') ain = AlertState.Clear;
+
+                    if (root.TryGetValue("alerts", out v) && v is List<object>)
                     {
-                        string rn = a.TryGetValue("r", out x) && x != null ? Convert.ToString(x) : null;
-                        if (rn == null || rn != raionName) continue;
+                        foreach (object item in (List<object>)v)
+                        {
+                            Dictionary<string, object> a = item as Dictionary<string, object>;
+                            if (a == null) continue;
+                            object x;
+                            int u = a.TryGetValue("u", out x) ? ToInt(x) : -1;
+                            int ao = a.TryGetValue("o", out x) ? ToInt(x) : -1;
+                            if (ao != obl && u != obl) continue;
+                            if (s.Raion != 0 && u != obl && u != s.Raion)
+                            {
+                                string rn = a.TryGetValue("r", out x) && x != null ? Convert.ToString(x) : null;
+                                if (rn == null || rn != raionName) continue;
+                            }
+                            if (s.Raion == 0 && u != obl && !(s.Partial || o == 'A')) continue;   // лише частина області
+                            if (a.TryGetValue("s", out x)) Earliest(ainRes, ParseIso(x));
+                            if (a.TryGetValue("t", out x) && x is List<object>)
+                                foreach (object t in (List<object>)x)
+                                {
+                                    string ts = Convert.ToString(t);
+                                    if (!string.IsNullOrEmpty(ts) && !r.Threats.Contains(ts)) r.Threats.Add(ts);
+                                }
+                        }
                     }
-                    if (s.Raion == 0 && u != obl && !(s.Partial || o == 'A')) continue;   // лише частина області
-                    if (a.TryGetValue("s", out x) && x != null)
+                }
+                catch { ain = AlertState.Unknown; }
+            }
+
+            // --- Джерело 2: NEPTUN (офіційні тривоги UkraineAlarm по районах)
+            if (nep != null)
+            {
+                string oblN = Norm(s.Region), raionN = Norm(raionName);
+                bool oblWide = false, raionHit = false;
+                int alertedInObl = 0;
+                if (nep.TryGetValue("o", out v) && v is List<object>)
+                    foreach (object item in (List<object>)v)
                     {
-                        try
-                        {
-                            DateTime st = DateTime.Parse(Convert.ToString(x), System.Globalization.CultureInfo.InvariantCulture,
-                                System.Globalization.DateTimeStyles.RoundtripKind).ToLocalTime();
-                            if (r.Since == null || st < r.Since.Value) r.Since = st;
-                        }
-                        catch { }
+                        List<object> e = item as List<object>;
+                        if (e == null || e.Count < 1 || Norm(Convert.ToString(e[0])) != oblN) continue;
+                        oblWide = true;
+                        if (e.Count > 1) Earliest(nepRes, ParseIso(e[1]));
                     }
-                    if (a.TryGetValue("t", out x) && x is List<object>)
-                        foreach (object t in (List<object>)x)
-                        {
-                            string ts = Convert.ToString(t);
-                            if (!string.IsNullOrEmpty(ts) && !r.Threats.Contains(ts)) r.Threats.Add(ts);
-                        }
+                if (nep.TryGetValue("r", out v) && v is List<object>)
+                    foreach (object item in (List<object>)v)
+                    {
+                        List<object> e = item as List<object>;
+                        if (e == null || e.Count < 2 || Norm(Convert.ToString(e[0])) != oblN) continue;
+                        alertedInObl++;
+                        bool mine = s.Raion != 0 && Norm(Convert.ToString(e[1])) == raionN;
+                        if (mine) raionHit = true;
+                        if ((mine || s.Raion == 0) && e.Count > 2) Earliest(nepRes, ParseIso(e[2]));
+                    }
+                int raionsInObl = 0;
+                for (int i = 0; i < Locations.RaionOblast.Length; i++) if (Locations.RaionOblast[i] == obl) raionsInObl++;
+                bool allRaions = raionsInObl > 0 && alertedInObl >= raionsInObl;
+                if (s.Raion != 0) nepState = (oblWide || raionHit) ? AlertState.Alert : AlertState.Clear;
+                else nepState = (oblWide || allRaions || (s.Partial && alertedInObl > 0)) ? AlertState.Alert : AlertState.Clear;
+            }
+
+            if (ain == AlertState.Unknown && nepState == AlertState.Unknown) throw new Exception("неочікувана відповідь сервера");
+
+            // --- Зведення: тривога, якщо її показує хоча б одне джерело
+            r.State = (ain == AlertState.Alert || nepState == AlertState.Alert) ? AlertState.Alert : AlertState.Clear;
+            if (ain == AlertState.Alert) Earliest(r, ainRes.Since);
+            if (nepState == AlertState.Alert) Earliest(r, nepRes.Since);
+
+            List<string> names = new List<string>();
+            if (ain != AlertState.Unknown) names.Add("alerts.in.ua");
+            if (nepState != AlertState.Unknown) names.Add("NEPTUN");
+            r.Source = string.Join(" + ", names.ToArray());
+            if (ain != AlertState.Unknown && nepState != AlertState.Unknown)
+            {
+                if (ain == nepState) r.Note = "джерела збігаються";
+                else
+                {
+                    r.Note = "джерела розходяться: " + (ain == AlertState.Alert ? "тривогу показує лише alerts.in.ua" : "тривогу показує лише NEPTUN");
+                    r.Disagree = true;
                 }
             }
+
             if (r.State != AlertState.Alert) { r.Threats.Clear(); r.Since = null; }
             r.Threats.Sort(delegate(string a1, string b1)
             {
@@ -999,7 +1081,7 @@ namespace Trevoga
             MaximizeBox = false;
             StartPosition = FormStartPosition.CenterScreen;
             BackColor = Gfx.Bg;
-            ClientSize = new Size(460, 612);
+            ClientSize = new Size(460, 636);
             Icon = icoGray;
 
             // --- статус
@@ -1102,6 +1184,18 @@ namespace Trevoga
             lblFooter.Font = new Font("Segoe UI", 8.5f);
             lblFooter.Text = "Хрестик ховає програму до годинника. Вихід — правою кнопкою на значку.";
             Controls.Add(lblFooter);
+
+            // Обов'язкове посилання на NEPTUN (умова використання їхніх даних)
+            LinkLabel lnk = new LinkLabel();
+            lnk.Text = "Дані: alerts.in.ua · Карта повітряних тривог — NEPTUN (neptun.in.ua)";
+            lnk.Location = new Point(16, 610);
+            lnk.AutoSize = true;
+            lnk.Font = new Font("Segoe UI", 8.5f);
+            lnk.LinkColor = Gfx.Muted;
+            lnk.ActiveLinkColor = Gfx.Text;
+            lnk.LinkArea = new LinkArea(lnk.Text.IndexOf("Карта"), lnk.Text.Length - lnk.Text.IndexOf("Карта"));
+            lnk.LinkClicked += delegate { try { System.Diagnostics.Process.Start("https://neptun.in.ua/"); } catch { } };
+            Controls.Add(lnk);
 
             // --- трей
             ContextMenu menu = new ContextMenu();
@@ -1323,6 +1417,7 @@ namespace Trevoga
         }
 
         string lastNote = "", lastSource = "", lastTime = "";
+        bool lastDisagree = false;
 
         void UpdateCard()
         {
@@ -1335,6 +1430,7 @@ namespace Trevoga
                 card.Title = ballistic ? "БАЛІСТИКА!" : "ПОВІТРЯНА ТРИВОГА";
                 card.CardColor = ballistic ? Gfx.DarkRed : Gfx.Red;
                 card.Detail = since.HasValue ? "Триває " + Ago(since.Value) + " · з " + since.Value.ToString("HH:mm") : "Пройдіть в укриття";
+                if (lastDisagree) card.Detail += " · підтверджує 1 з 2 джерел";
                 foreach (string t in threats) card.Chips.Add(AlertSource.ThreatTitle(t));
                 card.HotFirstChip = ballistic;
             }
@@ -1379,6 +1475,7 @@ namespace Trevoga
                 return;
             }
             lastNote = r.Note;
+            lastDisagree = r.Disagree;
             lastSource = r.Source;
             lastTime = DateTime.Now.ToString("HH:mm:ss");
 

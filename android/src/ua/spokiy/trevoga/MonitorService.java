@@ -130,7 +130,7 @@ public class MonitorService extends Service {
         }
 
         p.edit().putInt(Prefs.STATE, r.state).putString(Prefs.STATUS_TIME, time).putString(Prefs.THREATS, join(threats))
-                .putString(Prefs.SOURCE, r.source).putString(Prefs.NOTE, r.note)
+                .putString(Prefs.SOURCE, r.source).putString(Prefs.NOTE, r.note).putBoolean(Prefs.DISAGREE, r.disagree)
                 .putLong(Prefs.SINCE, since).putLong(Prefs.CLEARED_AT, clearedAt)
                 .remove(Prefs.ERROR).apply();
         String placeName = Prefs.place(this);

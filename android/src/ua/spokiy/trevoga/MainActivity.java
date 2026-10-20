@@ -223,6 +223,14 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         footer.setPadding(dp(4), dp(14), dp(4), 0);
         root.addView(footer);
 
+        // Обов'язкове посилання на NEPTUN (умова використання їхніх даних)
+        TextView credit = text("", 12, MUTED, false);
+        credit.setPadding(dp(4), dp(10), dp(4), 0);
+        credit.setText(android.text.Html.fromHtml("Дані: alerts.in.ua · <a href=\"https://neptun.in.ua/\">Карта повітряних тривог — NEPTUN</a>"));
+        credit.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
+        credit.setLinkTextColor(TEXT);
+        root.addView(credit);
+
         setContentView(scroll);
 
         if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.start(this);
@@ -461,7 +469,8 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         } else if (state == AlertSource.ALERT) {
             boolean ballistic = threats.contains("ballistic_missiles");
             title.setText(ballistic ? "БАЛІСТИКА!" : "ПОВІТРЯНА ТРИВОГА");
-            detail.setText(since > 0 ? "Триває " + ago(since) + " · з " + hm.format(new Date(since)) : "Пройдіть в укриття");
+            detail.setText((since > 0 ? "Триває " + ago(since) + " · з " + hm.format(new Date(since)) : "Пройдіть в укриття")
+                    + (prefs.getBoolean(Prefs.DISAGREE, false) ? " · підтверджує 1 з 2 джерел" : ""));
             for (int i = 0; i < threats.size(); i++)
                 chips.addView(chip(AlertSource.threatTitle(threats.get(i)), ballistic && i == 0));
             paintCard(ballistic ? DARK_RED : RED);
