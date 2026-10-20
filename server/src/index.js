@@ -1,7 +1,7 @@
 // Сервер-посредник для программы «Тривога».
 // Токен alerts.in.ua хранится только здесь (секрет ALERTS_TOKEN), пользователи его не видят.
 // Все запросы приложений сходятся в один Durable Object, который ходит к источникам
-// (alerts.in.ua и NEPTUN) не чаще раза в REFRESH_MS — сколько бы ни было пользователей.
+// (alerts.in.ua — раз в 20 с, NEPTUN — раз в 5 с), сколько бы ни было пользователей.
 //
 // GET /status  ->  {
 //   ok: true,
@@ -15,8 +15,10 @@
 
 const UPSTREAM_DEFAULT = "https://api.alerts.in.ua";
 const NEPTUN_DEFAULT = "https://neptun.in.ua";
-const REFRESH_MS = 20000;      // 2 запроса к alerts.in.ua раз в 20 с = 6 в минуту (лимит у них 8–10)
-const EDGE_CACHE_S = 10;       // кэш на краю Cloudflare, чтобы не будить Durable Object на каждый запрос
+const AIN_MS = 20000;          // alerts.in.ua: 2 запити раз на 20 с = 6 на хвилину (їхній ліміт 8–10)
+const NEP_MS = 5000;           // NEPTUN: не частіше ніж раз на 5 с (їхня умова)
+const STALE_MS = 120000;       // дані джерела старші за 2 хв вважаємо недійсними
+const EDGE_CACHE_S = 3;        // кеш на краю Cloudflare, щоб не будити Durable Object на кожен запит
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -77,27 +79,27 @@ export class AlertsHub {
   constructor(state, env) {
     this.state = state;
     this.env = env;
-    this.loaded = false;     // данные переживают перезапуск объекта: храним их и в его хранилище
-    this.data = null;        // последний удачный ответ (строка JSON)
-    this.fetchedAt = 0;
-    this.okAt = 0;
-    this.pending = null;     // общий запрос, если несколько пришли одновременно
-    this.lastError = null;
+    this.loaded = false;     // дані переживають перезапуск об'єкта: зберігаємо їх і в його сховищі
+    // по кожному джерелу: значення, час останньої спроби, час останньої вдалої, помилка
+    this.ain = { val: null, at: 0, okAt: 0, err: null };
+    this.nep = { val: null, at: 0, okAt: 0, err: null };
+    this.pending = null;     // спільний запит, якщо кілька прийшли одночасно
   }
 
   async load() {
     if (this.loaded) return;
-    const m = await this.state.storage.get(["data", "fetchedAt", "okAt"]);
-    this.data = m.get("data") || null;
-    this.fetchedAt = m.get("fetchedAt") || 0;
-    this.okAt = m.get("okAt") || 0;
+    const m = await this.state.storage.get(["ain", "nep"]);
+    if (m.get("ain")) this.ain = m.get("ain");
+    if (m.get("nep")) this.nep = m.get("nep");
     this.loaded = true;
   }
 
-  async save() {
-    try {
-      await this.state.storage.put({ data: this.data, fetchedAt: this.fetchedAt, okAt: this.okAt });
-    } catch (e) { /* не критично */ }
+  fresh(src, now) {
+    return src.val && now - src.okAt < STALE_MS ? src.val : null;
+  }
+
+  due(now) {
+    return { ain: now - this.ain.at >= AIN_MS, nep: now - this.nep.at >= NEP_MS };
   }
 
   async fetch(request) {
@@ -105,25 +107,38 @@ export class AlertsHub {
     const now = Date.now();
     if (new URL(request.url).pathname === "/health") {
       return json({
-        ok: !!this.data,
+        ok: !!(this.fresh(this.ain, now) || this.fresh(this.nep, now)),
         service: "trevoga",
         token_set: !!this.env.ALERTS_TOKEN,
-        sources: this.sources || null,
-        data_age_s: this.data ? Math.round((now - this.okAt) / 1000) : null,
-        last_error: this.lastError,
+        sources: {
+          alerts_in_ua: { ok: !!this.fresh(this.ain, now), age_s: this.ain.okAt ? Math.round((now - this.ain.okAt) / 1000) : null, error: this.ain.err },
+          neptun: { ok: !!this.fresh(this.nep, now), age_s: this.nep.okAt ? Math.round((now - this.nep.okAt) / 1000) : null, error: this.nep.err },
+        },
       });
     }
-    if (this.data && now - this.fetchedAt < REFRESH_MS) return this.reply();
-    if (!this.pending) {
-      this.pending = this.refresh().finally(() => { this.pending = null; });
+    const d = this.due(now);
+    if (d.ain || d.nep) {
+      if (!this.pending) this.pending = this.refresh().finally(() => { this.pending = null; });
+      await this.pending;
     }
-    await this.pending;
     return this.reply();
   }
 
   reply() {
-    if (this.data) return new Response(this.data, { headers: { "Content-Type": "application/json; charset=utf-8" } });
-    return json({ ok: false, error: this.lastError || "no data" }, 502);
+    const now = Date.now();
+    const a = this.fresh(this.ain, now), n = this.fresh(this.nep, now);
+    if (!a && !n) {
+      return json({ ok: false, error: "alerts.in.ua: " + (this.ain.err || "немає даних") + "; NEPTUN: " + (this.nep.err || "немає даних") }, 502);
+    }
+    const body = JSON.stringify({
+      ok: true,
+      updated: new Date(Math.max(this.ain.okAt, this.nep.okAt)).toISOString(),
+      air: a ? a.air : null,
+      alerts: a ? a.alerts : [],
+      neptun: n,
+      src: { alerts_in_ua: a ? "ok" : this.ain.err || "немає даних", neptun: n ? "ok" : this.nep.err || "немає даних" },
+    });
+    return new Response(body, { headers: { "Content-Type": "application/json; charset=utf-8" } });
   }
 
   async upstream(path) {
@@ -193,33 +208,24 @@ export class AlertsHub {
   }
 
   async refresh() {
-    const [ain, nep] = await Promise.allSettled([this.fromAlertsInUa(), this.fromNeptun()]);
-    const errMsg = (x) => String(x && x.reason && x.reason.message ? x.reason.message : x && x.reason);
-    const src = {
-      alerts_in_ua: ain.status === "fulfilled" ? "ok" : errMsg(ain),
-      neptun: nep.status === "fulfilled" ? "ok" : errMsg(nep),
+    const now = Date.now();
+    const d = this.due(now);
+    const jobs = [];
+    const toSave = {};
+    const run = async (src, key, fn) => {
+      src.at = Date.now();
+      try {
+        src.val = await fn();
+        src.okAt = Date.now();
+        src.err = null;
+      } catch (e) {
+        src.err = String(e && e.message ? e.message : e);
+      }
+      toSave[key] = src;
     };
-    this.sources = src;
-    if (ain.status !== "fulfilled" && nep.status !== "fulfilled") {
-      this.lastError = "alerts.in.ua: " + src.alerts_in_ua + "; NEPTUN: " + src.neptun;
-      // якщо старі дані є і їм менше 2 хвилин — віддаємо їх, інакше помилку
-      if (this.data && Date.now() - this.okAt > 120000) this.data = null;
-      // наступна спроба — не раніше ніж через 10 с
-      this.fetchedAt = Date.now() - REFRESH_MS + 10000;
-      await this.save();
-      return;
-    }
-    this.data = JSON.stringify({
-      ok: true,
-      updated: new Date().toISOString(),
-      air: ain.status === "fulfilled" ? ain.value.air : null,
-      alerts: ain.status === "fulfilled" ? ain.value.alerts : [],
-      neptun: nep.status === "fulfilled" ? nep.value : null,
-      src,
-    });
-    this.fetchedAt = Date.now();
-    this.okAt = this.fetchedAt;
-    this.lastError = null;
-    await this.save();
+    if (d.ain) jobs.push(run(this.ain, "ain", () => this.fromAlertsInUa()));
+    if (d.nep) jobs.push(run(this.nep, "nep", () => this.fromNeptun()));
+    await Promise.all(jobs);
+    try { await this.state.storage.put(toSave); } catch (e) { /* не критично */ }
   }
 }

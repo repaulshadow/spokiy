@@ -20,7 +20,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("2.4.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.5.0.0")]
 
 namespace Trevoga
 {
@@ -69,7 +69,7 @@ namespace Trevoga
     {
         public string Region = "м. Київ";
         public int Raion = 0;              // uid району alerts.in.ua, 0 = вся область
-        public int Interval = 20;          // секунд між перевірками
+        public int Interval = 15;          // секунд між перевірками
         public bool Partial = false;       // вважати тривогою часткову (окремі громади)
         public bool Sound = true;
         public string Voice = "tetiana";   // tetiana, mykyta, off
@@ -105,6 +105,7 @@ namespace Trevoga
                 }
             }
             catch { }
+            if (s.Interval == 20) s.Interval = 15;   // старе значення за замовчуванням (до 2.5)
             if (s.Interval < 10) s.Interval = 10;
             return s;
         }
