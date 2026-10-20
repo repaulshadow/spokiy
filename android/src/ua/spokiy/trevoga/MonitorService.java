@@ -141,18 +141,19 @@ public class MonitorService extends Service {
             firstCheck = false;
             return; // при запуску звук не граємо, лише показуємо статус
         }
+        boolean quiet = p.getBoolean(Prefs.NOTIFY_ONLY, false);   // «лише сповіщення»: без голосу і сирени
         if (added.contains("ballistic_missiles")) {
-            Sounds.ballistic(this, old != AlertSource.ALERT, threats);      // балістика — окремий терміновий сигнал
-            alertNotification("БАЛІСТИКА!", placeName + ". Негайно в укриття!");
+            if (!quiet) Sounds.ballistic(this, old != AlertSource.ALERT, threats);   // балістика — окремий терміновий сигнал
+            showAlert(this, "БАЛІСТИКА!", placeName + ". Негайно в укриття!" + (th.length() > 0 ? "\n" + th : ""), DARK_RED, quiet);
         } else if (old != AlertSource.ALERT && r.state == AlertSource.ALERT) {
-            Sounds.alarm(this, threats);
-            alertNotification("ПОВІТРЯНА ТРИВОГА!", placeName + ". Пройдіть в укриття!" + (th.length() > 0 ? "\n" + th : ""));
+            if (!quiet) Sounds.alarm(this, threats);
+            showAlert(this, "ПОВІТРЯНА ТРИВОГА!", placeName + ". Пройдіть в укриття!" + (th.length() > 0 ? "\n" + th : ""), RED, quiet);
         } else if (old == AlertSource.ALERT && r.state == AlertSource.ALERT && !added.isEmpty()) {
-            Sounds.newThreats(this, added);
-            alertNotification("Нова загроза", placeName + ": " + AlertSource.titles(added));
+            if (!quiet) Sounds.newThreats(this, added);
+            showAlert(this, "Нова загроза", placeName + ": " + AlertSource.titles(added), RED, quiet);
         } else if (old == AlertSource.ALERT && r.state == AlertSource.CLEAR) {
-            Sounds.clear(this);
-            alertNotification("Відбій тривоги", placeName);
+            if (!quiet) Sounds.clear(this);
+            showAlert(this, "Відбій тривоги", placeName, GREEN, quiet);
         }
     }
 
@@ -174,8 +175,25 @@ public class MonitorService extends Service {
                 : state == AlertSource.CLEAR ? "Тривоги немає — " + region
                 : "Немає даних — " + region;
         if (error) text += " (немає зв'язку)";
+        lastStatusColor = state == AlertSource.ALERT
+                ? (parseList(Prefs.get(this).getString(Prefs.THREATS, "")).contains("ballistic_missiles") ? DARK_RED : RED)
+                : state == AlertSource.CLEAR ? GREEN : GRAY;
+        lastStatusTitle = state == AlertSource.ALERT ? "ПОВІТРЯНА ТРИВОГА" : state == AlertSource.CLEAR ? "Тривоги немає" : "Тривога: стежу";
         ((NotificationManager) getSystemService(NOTIFICATION_SERVICE))
                 .notify(NOTIF_STATUS, statusNotification(text));
+    }
+
+    static final int RED = 0xFFDC2626, DARK_RED = 0xFF991B1B, GREEN = 0xFF16A34A, GRAY = 0xFF6B7280;
+    private int lastStatusColor = GRAY;
+    private String lastStatusTitle = "Тривога: стежу";
+
+    /** Заливка сповіщення кольором (Android 8+; колір фону діє для постійного сповіщення служби). */
+    static void colorize(Notification.Builder b, int color) {
+        b.setColor(color);
+        if (android.os.Build.VERSION.SDK_INT >= 26) {
+            try { Notification.Builder.class.getMethod("setColorized", boolean.class).invoke(b, true); }
+            catch (Throwable ignored) { }
+        }
     }
 
     private PendingIntent openApp() {
@@ -185,21 +203,22 @@ public class MonitorService extends Service {
 
     @SuppressWarnings("deprecation")
     private Notification statusNotification(String text) {
-        return Prefs.builder(this, Prefs.CH_STATUS)
+        Notification.Builder b = Prefs.builder(this, Prefs.CH_STATUS)
                 .setSmallIcon(R.drawable.ic_launcher)
-                .setContentTitle("Тривога: стежу")
+                .setContentTitle(lastStatusTitle)
                 .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
                 .setOngoing(true)
                 .setPriority(Notification.PRIORITY_LOW)
-                .setContentIntent(openApp())
-                .build();
+                .setContentIntent(openApp());
+        colorize(b, lastStatusColor);
+        return b.build();
     }
 
     @SuppressWarnings("deprecation")
-    private void alertNotification(String title, String text) {
-        PendingIntent stop = PendingIntent.getService(this, 1,
-                new Intent(this, MonitorService.class).setAction(ACTION_STOP_SOUND), PendingIntent.FLAG_UPDATE_CURRENT);
-        Notification n = Prefs.builder(this, Prefs.CH_ALERT)
+    static void showAlert(Context ctx, String title, String text, int color, boolean quiet) {
+        Intent open = new Intent(ctx, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        Notification.Builder b = Prefs.builder(ctx, Prefs.CH_ALERT)
                 .setSmallIcon(R.drawable.ic_launcher)
                 .setContentTitle(title)
                 .setContentText(text)
@@ -207,10 +226,20 @@ public class MonitorService extends Service {
                 .setPriority(Notification.PRIORITY_MAX)
                 .setCategory(Notification.CATEGORY_ALARM)
                 .setAutoCancel(true)
-                .setContentIntent(openApp())
-                .addAction(0, "Вимкнути звук", stop)
-                .build();
-        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(NOTIF_ALERT, n);
+                .setContentIntent(PendingIntent.getActivity(ctx, 0, open, PendingIntent.FLAG_UPDATE_CURRENT));
+        colorize(b, color);
+        if (!quiet) {
+            PendingIntent stop = PendingIntent.getService(ctx, 1,
+                    new Intent(ctx, MonitorService.class).setAction(ACTION_STOP_SOUND), PendingIntent.FLAG_UPDATE_CURRENT);
+            b.addAction(0, "Вимкнути звук", stop);
+        } else {
+            // без звуку, лише коротка вібрація, щоб сповіщення помітили
+            try {
+                android.os.Vibrator v = (android.os.Vibrator) ctx.getSystemService(VIBRATOR_SERVICE);
+                if (v != null) v.vibrate(new long[]{0, 250, 150, 250}, -1);
+            } catch (Exception ignored) { }
+        }
+        ((NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE)).notify(NOTIF_ALERT, b.build());
     }
 
     @Override

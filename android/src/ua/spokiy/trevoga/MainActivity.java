@@ -159,7 +159,18 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
 
         // ---------- сповіщення ----------
         LinearLayout notif = card("Сповіщення");
-        notif.addView(fieldLabel("Голос перед сиреною"));
+        final Switch quiet = new Switch(this);
+        quiet.setText("Лише сповіщення — без голосу і сирени");
+        quiet.setTextColor(TEXT);
+        quiet.setTextSize(15);
+        quiet.setPadding(0, dp(10), 0, dp(4));
+        quiet.setChecked(prefs.getBoolean(Prefs.NOTIFY_ONLY, false));
+        notif.addView(quiet);
+        TextView quietHint = text("Сповіщення буде зафарбоване кольором тривоги (червоний) або відбою (зелений).", 12, MUTED, false);
+        notif.addView(quietHint);
+
+        final TextView voiceLabel = fieldLabel("Голос перед сиреною");
+        notif.addView(voiceLabel);
         final Spinner voice = new Spinner(this);
         final String[] voiceIds = {"tetiana", "mykyta", "off"};
         ArrayAdapter<String> va = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item,
@@ -175,6 +186,15 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             public void onNothingSelected(AdapterView<?> p) { }
         });
         notif.addView(voice);
+        final View[] soundViews = {voiceLabel, voice};
+        quiet.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(CompoundButton c, boolean v) {
+                prefs.edit().putBoolean(Prefs.NOTIFY_ONLY, v).apply();
+                if (v) Sounds.stop();
+                for (View x : soundViews) { x.setEnabled(!v); x.setAlpha(v ? 0.4f : 1f); }
+            }
+        });
+        for (View x : soundViews) { x.setEnabled(!quiet.isChecked()); x.setAlpha(quiet.isChecked() ? 0.4f : 1f); }
 
         notif.addView(fieldLabel("Свої звуки"));
         LinearLayout row2 = row();
@@ -208,11 +228,18 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             public void onClick(View v) {
                 List<String> t = MonitorService.parseList(prefs.getString(Prefs.THREATS, ""));
                 if (t.isEmpty()) t.add("drones");
-                Sounds.alarm(MainActivity.this, t);
+                boolean q = prefs.getBoolean(Prefs.NOTIFY_ONLY, false);
+                if (!q) Sounds.alarm(MainActivity.this, t);
+                MonitorService.showAlert(MainActivity.this, "ПОВІТРЯНА ТРИВОГА! (тест)",
+                        Prefs.place(MainActivity.this) + ". Пройдіть в укриття!\n" + AlertSource.titles(t), MonitorService.RED, q);
             }
         }), weight(0));
         row.addView(button("Тест відбою", false, new View.OnClickListener() {
-            public void onClick(View v) { Sounds.clear(MainActivity.this); }
+            public void onClick(View v) {
+                boolean q = prefs.getBoolean(Prefs.NOTIFY_ONLY, false);
+                if (!q) Sounds.clear(MainActivity.this);
+                MonitorService.showAlert(MainActivity.this, "Відбій тривоги (тест)", Prefs.place(MainActivity.this), MonitorService.GREEN, q);
+            }
         }), weight(dp(8)));
         row.addView(button("Тиша", true, new View.OnClickListener() {
             public void onClick(View v) { Sounds.stop(); }
