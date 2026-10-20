@@ -10,7 +10,7 @@
 //   neptun: { r: [["Одеська область","Одеський район","<since>"]], o: [["АР Крим","<since>"]] },  // або null
 //   src: { alerts_in_ua: "ok" | "немає токена" | "<помилка>", neptun: "ok" | "<помилка>" },
 //   alerts: [ { u: 22, o: 22, r: "Харківський район", s: "2026-10-20T04:10:00.000Z",
-//               t: ["ballistic_missiles", "drones"] }, ... ]   // u — uid місця, o — області, s — початок
+//               l: "red", t: ["ballistic_missiles", "drones"] }, ... ]   // u — uid місця, o — області, s — початок, l — рівень (red/yellow)
 // }
 
 const UPSTREAM_DEFAULT = "https://api.alerts.in.ua";
@@ -182,6 +182,7 @@ export class AlertsHub {
         o: toInt(a.location_oblast_uid),
         r: a.location_raion || null,
         s: a.started_at || null,
+        l: a.alert_level || null,     // рівень: "red" | "yellow"
         t,
       });
     }
