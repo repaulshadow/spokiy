@@ -1,0 +1,59 @@
+name: Alert history (alerts.in.ua)
+
+# Історія тривог за останню добу з alerts.in.ua — для розбору затримок.
+# Actions -> "Alert history (alerts.in.ua)" -> Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      oblast_uid:
+        description: "UID області (18 = Одеська, 31 = м. Київ, 22 = Харківська ...)"
+        default: "18"
+      raion:
+        description: "Фільтр за назвою (частина назви району/громади), можна порожньо"
+        default: "Одеськ"
+      hours:
+        description: "За скільки годин"
+        default: "24"
+
+jobs:
+  history:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      ALERTS_TOKEN: ${{ secrets.ALERTS_TOKEN }}
+      OBL: ${{ inputs.oblast_uid }}
+      FLT: ${{ inputs.raion }}
+      HOURS: ${{ inputs.hours }}
+    steps:
+      - name: Fetch history
+        run: |
+          python3 - <<'EOF'
+          import json, os, urllib.request, datetime as dt
+          url = f"https://api.alerts.in.ua/v1/regions/{os.environ['OBL']}/alerts/month_ago.json"
+          req = urllib.request.Request(url, headers={"Authorization": "Bearer " + os.environ["ALERTS_TOKEN"],
+                                                     "User-Agent": "Trevoga-diag/1.0"})
+          data = json.load(urllib.request.urlopen(req, timeout=30))
+          since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=int(os.environ["HOURS"]))
+          kyiv = dt.timezone(dt.timedelta(hours=3))
+          def t(s):
+              if not s: return None
+              return dt.datetime.fromisoformat(s.replace("Z", "+00:00"))
+          rows = []
+          for a in data.get("alerts", []):
+              st = t(a.get("started_at"))
+              if not st or st < since: continue
+              name = f"{a.get('location_title','')} ({a.get('location_type','')})"
+              if os.environ["FLT"] and os.environ["FLT"].lower() not in (name + " " + str(a.get("location_raion",""))).lower():
+                  continue
+              fin = t(a.get("finished_at"))
+              upd = t(a.get("updated_at"))
+              rows.append((st, f"{name}: старт {st.astimezone(kyiv):%H:%M:%S}"
+                                + (f", відбій {fin.astimezone(kyiv):%H:%M:%S}" if fin else ", триває")
+                                + (f", оновлено {upd.astimezone(kyiv):%H:%M:%S}" if upd else "")
+                                + f", рівень {a.get('alert_level')}, тип {a.get('alert_type')}, notes: {(a.get('notes') or '')[:80]}"))
+          rows.sort()
+          if not rows:
+              print("::notice title=history::Нічого не знайдено")
+          for _, line in rows[-40:]:
+              print("::notice title=history (час київський)::" + line)
+          EOF
