@@ -11,3 +11,8 @@ class_name = "AlertsHub"
 [[migrations]]
 tag = "v1"
 new_sqlite_classes = ["AlertsHub"]
+
+# Файли для автооновлення програм (version.json, Trevoga.exe, Trevoga.apk).
+# Папку public/ готує workflow перед викладкою; такі запити віддаються без запуску Worker (безкоштовно).
+[assets]
+directory = "./public"

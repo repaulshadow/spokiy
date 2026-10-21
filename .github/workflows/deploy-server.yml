@@ -5,7 +5,7 @@ name: Deploy server (Cloudflare)
 on:
   push:
     branches: [main]
-    paths: ["server/**", ".github/workflows/deploy-server.yml"]
+    paths: ["server/**", ".github/workflows/deploy-server.yml", "Trevoga.exe", "Trevoga.apk"]
   workflow_dispatch:
 
 permissions:
@@ -38,6 +38,30 @@ jobs:
           if [ -z "$ALERTS_TOKEN" ]; then
             echo "::warning::Секрет ALERTS_TOKEN ещё не задан: сервер будет выложен, но данных о тревогах не будет, пока токен не добавите и не запустите workflow снова."
           fi
+
+      - name: Prepare update files (version.json, exe, apk)
+        run: |
+          python3 - <<'PY'
+          import hashlib, json, os, re, shutil
+          root = ".."
+          os.makedirs("public/download", exist_ok=True)
+          def sha(p): return hashlib.sha256(open(p, "rb").read()).hexdigest()
+          out = {}
+          exe = os.path.join(root, "Trevoga.exe")
+          if os.path.exists(exe):
+              shutil.copy(exe, "public/download/Trevoga.exe")
+              ver = re.search(r'AssemblyVersion\("([0-9.]+)"\)', open(os.path.join(root, "Trevoga.cs"), encoding="utf-8-sig").read()).group(1)
+              out["windows"] = {"version": ver, "url": "/download/Trevoga.exe", "sha256": sha(exe), "size": os.path.getsize(exe)}
+          apk = os.path.join(root, "Trevoga.apk")
+          if os.path.exists(apk):
+              shutil.copy(apk, "public/download/Trevoga.apk")
+              man = open(os.path.join(root, "android/AndroidManifest.xml"), encoding="utf-8").read()
+              code = int(re.search(r'android:versionCode="(\d+)"', man).group(1))
+              name = re.search(r'android:versionName="([^"]+)"', man).group(1)
+              out["android"] = {"code": code, "name": name, "url": "/download/Trevoga.apk", "sha256": sha(apk), "size": os.path.getsize(apk)}
+          json.dump(out, open("public/version.json", "w"), indent=2)
+          print("::notice title=version.json::" + json.dumps({k: {kk: v[kk] for kk in ("version", "code", "name") if kk in v} for k, v in out.items()}))
+          PY
 
       - name: Deploy worker
         run: |

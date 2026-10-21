@@ -89,6 +89,7 @@ public class MonitorService extends Service {
 
     private void checkOnce() {
         refreshConfigIfDue();
+        Updater.checkIfDue(this);
         SharedPreferences p = Prefs.get(this);
         String region = Prefs.region(this);
         int raion = Prefs.raion(this);

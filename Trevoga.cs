@@ -20,7 +20,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("2.9.0.0")]
+[assembly: System.Reflection.AssemblyVersion("3.0.0.0")]
 
 namespace Trevoga
 {
@@ -39,6 +39,16 @@ namespace Trevoga
             {
                 try { ServicePointManager.SecurityProtocol = SecurityProtocolType.Tls; } catch { }
             }
+
+            // Після автооновлення: чекаємо, поки стара копія програми закриється
+            foreach (string a in Environment.GetCommandLineArgs())
+                if (a.StartsWith("/waitpid:", StringComparison.OrdinalIgnoreCase))
+                {
+                    int pid;
+                    if (int.TryParse(a.Substring(9), out pid))
+                        try { System.Diagnostics.Process.GetProcessById(pid).WaitForExit(15000); } catch { }
+                }
+            Updater.CleanupOld();
 
             bool createdNew;
             using (Mutex m = new Mutex(true, "Trevoga_SingleInstance_Mutex", out createdNew))
@@ -60,6 +70,88 @@ namespace Trevoga
                 foreach (string a in Environment.GetCommandLineArgs())
                     if (a.Equals("/min", StringComparison.OrdinalIgnoreCase)) startHidden = true;
                 Application.Run(new MainForm(startHidden));
+            }
+        }
+    }
+
+    // ---------------- Автооновлення ----------------
+    static class Updater
+    {
+        public static Version Current
+        {
+            get { return typeof(Updater).Assembly.GetName().Version; }
+        }
+
+        static string ExePath { get { return Application.ExecutablePath; } }
+        static string NewPath { get { return ExePath + ".new"; } }
+        static string OldPath { get { return ExePath + ".old"; } }
+
+        public static void CleanupOld()
+        {
+            for (int i = 0; i < 5; i++)
+            {
+                try { if (File.Exists(OldPath)) File.Delete(OldPath); return; }
+                catch { Thread.Sleep(500); }
+            }
+        }
+
+        static string Sha256(byte[] data)
+        {
+            using (System.Security.Cryptography.SHA256 h = System.Security.Cryptography.SHA256.Create())
+            {
+                StringBuilder sb = new StringBuilder();
+                foreach (byte b in h.ComputeHash(data)) sb.Append(b.ToString("x2"));
+                return sb.ToString();
+            }
+        }
+
+        // Перевіряє наявність нової версії і завантажує її поруч (Trevoga.exe.new).
+        // Повертає номер нової версії, якщо файл готовий до встановлення; null — оновлень немає.
+        public static string Download(string server)
+        {
+            if (string.IsNullOrEmpty(server)) return null;
+            Dictionary<string, object> j = Json.Parse(AlertSource.Download(server + "/version.json?t=" + DateTime.UtcNow.Ticks)) as Dictionary<string, object>;
+            object v;
+            if (j == null || !j.TryGetValue("windows", out v)) return null;
+            Dictionary<string, object> w = v as Dictionary<string, object>;
+            if (w == null) return null;
+            object ver, url, sha;
+            if (!w.TryGetValue("version", out ver) || !w.TryGetValue("url", out url) || !w.TryGetValue("sha256", out sha)) return null;
+            Version nv;
+            try { nv = new Version(Convert.ToString(ver)); } catch { return null; }
+            if (nv <= Current) return null;
+
+            string u = Convert.ToString(url);
+            if (u.StartsWith("/")) u = server + u;
+            byte[] data;
+            using (WebClient wc = new WebClient())
+            {
+                wc.Headers.Add("User-Agent", "Trevoga-Win/" + Current);
+                data = wc.DownloadData(u + "?v=" + nv);
+            }
+            if (Sha256(data) != Convert.ToString(sha).ToLowerInvariant())
+                throw new Exception("контрольна сума не збігається");
+            File.WriteAllBytes(NewPath, data);
+            return nv.ToString();
+        }
+
+        // Підміняє exe і запускає нову версію. true — нова версія запущена, поточну треба закрити.
+        public static bool Apply(bool hidden)
+        {
+            if (!File.Exists(NewPath)) return false;
+            try
+            {
+                if (File.Exists(OldPath)) File.Delete(OldPath);
+                File.Move(ExePath, OldPath);            // запущений exe можна перейменувати
+                try { File.Move(NewPath, ExePath); }
+                catch { File.Move(OldPath, ExePath); throw; }
+                System.Diagnostics.Process.Start(ExePath,
+                    (hidden ? "/min " : "") + "/updated /waitpid:" + System.Diagnostics.Process.GetCurrentProcess().Id);
+                return true;
+            }
+            catch
+            {
+                return false;
             }
         }
     }
@@ -1163,7 +1255,9 @@ namespace Trevoga
         CheckBox chkSound, chkAutorun, chkPartial;
         Label lblFooter;
         NotifyIcon tray;
-        System.Windows.Forms.Timer timer, configTimer;
+        System.Windows.Forms.Timer timer, configTimer, updateTimer;
+        bool justUpdated = false, updateReady = false, updateBusy = false;
+        string updateVersion = null;
         Icon icoRed, icoGreen, icoGray, icoYellow, icoPurple;
         string level = "";
         AlertState state = AlertState.Unknown;
@@ -1316,7 +1410,7 @@ namespace Trevoga
 
             // Обов'язкове посилання на NEPTUN (умова використання їхніх даних)
             LinkLabel lnk = new LinkLabel();
-            lnk.Text = "Дані: alerts.in.ua · Карта повітряних тривог — NEPTUN (neptun.in.ua)";
+            lnk.Text = "v" + Updater.Current.ToString(3) + " · Дані: alerts.in.ua · Карта повітряних тривог — NEPTUN (neptun.in.ua)";
             lnk.Location = new Point(16, 610);
             lnk.AutoSize = true;
             lnk.Font = new Font("Segoe UI", 8.5f);
@@ -1331,6 +1425,7 @@ namespace Trevoga
             menu.MenuItems.Add("Відкрити", delegate { ShowWindow(); });
             menu.MenuItems.Add("Перевірити зараз", delegate { CheckNow(); });
             menu.MenuItems.Add("Тиша", delegate { Sounds.Stop(); });
+            menu.MenuItems.Add("Перевірити оновлення", delegate { CheckUpdate(true); });
             menu.MenuItems.Add("-");
             menu.MenuItems.Add("Вихід", delegate { reallyExit = true; Close(); });
             tray = new NotifyIcon();
@@ -1384,6 +1479,14 @@ namespace Trevoga
             configTimer.Interval = 6 * 3600 * 1000;
             configTimer.Tick += delegate { RefreshConfig(); };
             configTimer.Start();
+
+            // Автооновлення: через 2 хв після запуску і далі раз на 6 годин
+            updateTimer = new System.Windows.Forms.Timer();
+            updateTimer.Interval = 2 * 60 * 1000;
+            updateTimer.Tick += delegate { updateTimer.Interval = 6 * 3600 * 1000; CheckUpdate(false); };
+            updateTimer.Start();
+            foreach (string a in Environment.GetCommandLineArgs())
+                if (a.Equals("/updated", StringComparison.OrdinalIgnoreCase)) justUpdated = true;
 
             UpdateCard();
             settings.Save();
@@ -1481,6 +1584,55 @@ namespace Trevoga
         {
             string r = settings.Raion != 0 ? AlertSource.RaionName(settings.Raion) : null;
             return r != null ? r + ", " + settings.Region : settings.Region;
+        }
+
+        // manual = натиснули «Перевірити оновлення»
+        void CheckUpdate(bool manual)
+        {
+            if (updateBusy) return;
+            if (updateReady) { TryApplyUpdate(); return; }
+            updateBusy = true;
+            string srv = server;
+            ThreadPool.QueueUserWorkItem(delegate
+            {
+                string ver = null, err = null;
+                try { ver = Updater.Download(srv); }
+                catch (Exception ex) { err = ex.Message; }
+                try
+                {
+                    BeginInvoke((MethodInvoker)delegate
+                    {
+                        updateBusy = false;
+                        if (ver != null)
+                        {
+                            updateReady = true;
+                            updateVersion = ver;
+                            TryApplyUpdate();
+                        }
+                        else if (manual)
+                            MessageBox.Show(err != null ? "Не вдалося перевірити оновлення: " + err
+                                : "У вас найновіша версія (" + Updater.Current + ").", "Тривога");
+                    });
+                }
+                catch { updateBusy = false; }
+            });
+        }
+
+        // Оновлюємося лише коли тривоги немає, щоб не перервати сирену
+        void TryApplyUpdate()
+        {
+            if (!updateReady || state == AlertState.Alert) return;
+            if (Updater.Apply(!Visible))
+            {
+                reallyExit = true;
+                Close();
+            }
+            else
+            {
+                updateReady = false;
+                tray.ShowBalloonTip(8000, "Тривога", "Вийшла нова версія " + updateVersion +
+                    ", але оновитися автоматично не вдалося. Завантажте її вручну.", ToolTipIcon.Warning);
+            }
         }
 
         void RefreshConfig()
@@ -1665,12 +1817,18 @@ namespace Trevoga
                 if (old == AlertState.Alert) clearedAt = DateTime.Now;
             }
             UpdateCard();
+            if (updateReady && state != AlertState.Alert) BeginInvoke((MethodInvoker)delegate { TryApplyUpdate(); });
 
             string place = PlaceName();
             List<string> titles = new List<string>();
             foreach (string t in threats) titles.Add(AlertSource.ThreatTitle(t));
             string th = string.Join(", ", titles.ToArray());
 
+            if (justUpdated)
+            {
+                justUpdated = false;
+                tray.ShowBalloonTip(5000, "Тривога", "Програму оновлено до версії " + Updater.Current + ".", ToolTipIcon.Info);
+            }
             if (firstCheck)
             {
                 firstCheck = false;

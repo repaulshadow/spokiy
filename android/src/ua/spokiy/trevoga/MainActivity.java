@@ -52,6 +52,14 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     private final List<Integer> raionUids = new ArrayList<Integer>();
     private final Handler ticker = new Handler();
     private static final int PICK_ALARM = 11, PICK_CLEAR = 12;
+    static boolean visible = false;
+    private TextView versionInfo;
+    private final android.content.BroadcastReceiver dlDone = new android.content.BroadcastReceiver() {
+        public void onReceive(Context c, Intent i) {
+            long id = i.getLongExtra(android.app.DownloadManager.EXTRA_DOWNLOAD_ID, -1);
+            if (id == prefs.getLong(Updater.U_DL, -2)) finishUpdate(id);
+        }
+    };
 
     @Override
     protected void onCreate(Bundle b) {
@@ -285,6 +293,16 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
                 MonitorService.showAlert(MainActivity.this, "Відбій тривоги (тест)", Prefs.place(MainActivity.this), MonitorService.GREEN, q);
             }
         }), weight(dp(8)));
+        // ---------- оновлення ----------
+        LinearLayout upd = card("Оновлення");
+        versionInfo = text("", 14, TEXT, false);
+        versionInfo.setPadding(0, dp(8), 0, dp(4));
+        upd.addView(versionInfo);
+        upd.addView(button("Перевірити оновлення", false, new View.OnClickListener() {
+            public void onClick(View v) { checkUpdateNow(); }
+        }), matchWrap(dp(8)));
+        settings.addView(upd, matchWrap(dp(12)));
+
         TextView testsLabel = fieldLabel("ПЕРЕВІРКА ЗВУКУ І СПОВІЩЕНЬ");
         testsLabel.setPadding(dp(4), dp(18), 0, dp(6));
         settings.addView(testsLabel);
@@ -316,6 +334,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         home.addView(credit);
 
         setContentView(scroll);
+        handleIntent(getIntent());
 
         if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.start(this);
         askBattery(false);
@@ -437,6 +456,76 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
 
     // ---------- логіка ----------
 
+    // ---------- оновлення ----------
+
+    @Override
+    protected void onNewIntent(Intent i) {
+        super.onNewIntent(i);
+        handleIntent(i);
+    }
+
+    private void handleIntent(Intent i) {
+        if (i == null || i.getAction() == null) return;
+        if (Updater.ACTION_UPDATE.equals(i.getAction())) askUpdate();
+        else if (DownloadReceiver.ACTION_INSTALL.equals(i.getAction())) finishUpdate(prefs.getLong(Updater.U_DL, -1));
+    }
+
+    private void updateVersionInfo() {
+        if (versionInfo == null) return;
+        String t = "Встановлено: " + Updater.currentName(this);
+        if (Updater.available(this)) t += " · доступна " + prefs.getString(Updater.U_NAME, "");
+        versionInfo.setText(t);
+    }
+
+    private void checkUpdateNow() {
+        versionInfo.setText("Перевіряю…");
+        new Thread(new Runnable() {
+            public void run() {
+                String err = null;
+                boolean avail = false;
+                try { avail = Updater.check(MainActivity.this); } catch (Exception e) { err = e.getMessage(); }
+                final String fErr = err;
+                final boolean fAvail = avail;
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        updateVersionInfo();
+                        if (fErr != null) toastDialog("Не вдалося перевірити оновлення: " + fErr);
+                        else if (fAvail) askUpdate();
+                        else toastDialog("У вас найновіша версія (" + Updater.currentName(MainActivity.this) + ").");
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void toastDialog(String msg) {
+        new AlertDialog.Builder(this).setMessage(msg).setPositiveButton("OK", null).show();
+    }
+
+    private void askUpdate() {
+        if (!Updater.available(this)) return;
+        new AlertDialog.Builder(this)
+                .setTitle("Нова версія " + prefs.getString(Updater.U_NAME, ""))
+                .setMessage("Завантажити й встановити оновлення? Налаштування збережуться.")
+                .setPositiveButton("Оновити", new DialogInterface.OnClickListener() {
+                    public void onClick(DialogInterface d, int w) {
+                        try {
+                            Updater.startDownload(MainActivity.this);
+                            versionInfo.setText("Завантажую оновлення…");
+                        } catch (Exception e) {
+                            toastDialog("Не вдалося почати завантаження: " + e.getMessage());
+                        }
+                    }
+                })
+                .setNegativeButton("Пізніше", null)
+                .show();
+    }
+
+    private void finishUpdate(long id) {
+        String err = Updater.install(this, id);
+        if (err != null) toastDialog("Оновлення не вдалося: " + err);
+    }
+
     private void showSettings(boolean on) {
         settings.setVisibility(on ? View.VISIBLE : View.GONE);
         home.setVisibility(on ? View.GONE : View.VISIBLE);
@@ -533,12 +622,17 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     @Override
     protected void onResume() {
         super.onResume();
+        visible = true;
+        registerReceiver(dlDone, new android.content.IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE));
+        updateVersionInfo();
         prefs.registerOnSharedPreferenceChangeListener(this);
         ticker.post(tick);
     }
 
     @Override
     protected void onPause() {
+        visible = false;
+        try { unregisterReceiver(dlDone); } catch (Exception ignored) { }
         prefs.unregisterOnSharedPreferenceChangeListener(this);
         ticker.removeCallbacks(tick);
         super.onPause();
