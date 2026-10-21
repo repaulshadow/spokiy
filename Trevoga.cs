@@ -12,6 +12,9 @@ using System.Drawing.Text;
 using System.IO;
 using System.Media;
 using System.Net;
+using System.Net.Security;
+using System.Net.Sockets;
+using System.Security.Authentication;
 using System.Runtime.InteropServices;
 using System.Text;
 using System.Text.RegularExpressions;
@@ -20,7 +23,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("3.0.0.0")]
+[assembly: System.Reflection.AssemblyVersion("3.1.0.0")]
 
 namespace Trevoga
 {
@@ -364,6 +367,8 @@ namespace Trevoga
         public bool Disagree = false;    // джерела показують різне
         public int PollS = 0;            // рекомендована сервером частота опитування, с
         public string Level = "";        // рівень тривоги: "red" | "yellow" | "" (невідомо)
+        public AlertState AinState = AlertState.Unknown;   // що показує alerts.in.ua
+        public AlertState NepState = AlertState.Unknown;   // що показує NEPTUN
     }
 
     static class AlertSource
@@ -442,14 +447,9 @@ namespace Trevoga
             return char.ToUpperInvariant(str[uid]);
         }
 
-        public static CheckResult Check(Settings s, string server)
+        /// <summary>Запасні джерела, коли немає ні сервера, ні потоку NEPTUN.</summary>
+        public static CheckResult Fallback(Settings s, string serverError)
         {
-            string serverError = null;
-            if (!string.IsNullOrEmpty(server))
-            {
-                try { return FromServer(s, server); }
-                catch (Exception ex) { serverError = Short(ex.Message); }
-            }
             // Запасний шлях 1: NEPTUN напряму (дані по районах, без ключа)
             try
             {
@@ -476,7 +476,7 @@ namespace Trevoga
             return r;
         }
 
-        static string Short(string m)
+        public static string Short(string m)
         {
             if (string.IsNullOrEmpty(m)) return "помилка";
             m = m.Replace("\r", " ").Replace("\n", " ");
@@ -489,38 +489,69 @@ namespace Trevoga
         static CheckResult FromNeptunDirect(Settings s)
         {
             Dictionary<string, object> j = Json.Parse(Download(NeptunBase + "/api/v1/alerts")) as Dictionary<string, object>;
-            if (j == null) throw new Exception("NEPTUN: неочікувана відповідь");
+            Dictionary<string, object> nep = NeptunToNep(j);
+            if (nep == null) throw new Exception("NEPTUN: неочікувана відповідь");
+            Dictionary<string, object> root = new Dictionary<string, object>();
+            root["neptun"] = nep;
+            CheckResult res = FromRoot(s, root, null);
+            res.Source = "NEPTUN напряму";
+            return res;
+        }
+
+        // «reasons» NEPTUN (напр. «Дронова загроза (жовтий рівень)») → типи загроз як у alerts.in.ua
+        static List<object> NeptunTypes(object reasons)
+        {
+            string txt = "";
+            List<object> l = reasons as List<object>;
+            if (l != null) foreach (object o in l) txt += " " + Convert.ToString(o);
+            else if (reasons != null) txt = Convert.ToString(reasons);
+            txt = txt.ToLowerInvariant();
+            List<object> t = new List<object>();
+            if (txt.Contains("баліст")) t.Add("ballistic_missiles");
+            if (txt.Contains("крилат")) t.Add("cruise_missiles");
+            if (txt.Contains("ракет") && t.Count == 0) t.Add("unspecified_missiles");
+            if (txt.Contains("міг") || txt.Contains("mig")) t.Add("mig31k_departure");
+            if (txt.Contains("каб") || txt.Contains("авіабомб") || txt.Contains("керован")) t.Add("guided_aerial_bombs");
+            if (txt.Contains("дрон") || txt.Contains("бпла") || txt.Contains("шахед") || txt.Contains("безпілот")) t.Add("drones");
+            if (txt.Contains("артобстріл") || txt.Contains("артилер")) t.Add("artillery_shelling");
+            return t;
+        }
+
+        static string Lower(object x) { return x != null ? Convert.ToString(x).ToLowerInvariant() : null; }
+
+        /// <summary>Відповідь NEPTUN (/api/v1/alerts або повідомлення «alerts» з потоку) → формат нашого сервера.</summary>
+        public static Dictionary<string, object> NeptunToNep(Dictionary<string, object> j)
+        {
+            if (j == null) return null;
             object v;
             List<object> rs = j.TryGetValue("raions", out v) ? v as List<object> : null;
             List<object> os = j.TryGetValue("oblasts", out v) ? v as List<object> : null;
-            if (rs == null && os == null) throw new Exception("NEPTUN: неочікувана відповідь");
+            if (rs == null && os == null) return null;
             List<object> r = new List<object>(), o = new List<object>();
             if (rs != null)
                 foreach (object item in rs)
                 {
                     Dictionary<string, object> x = item as Dictionary<string, object>;
                     if (x == null) continue;
-                    object a, b, c, d;
-                    x.TryGetValue("oblast", out a); x.TryGetValue("name", out b); x.TryGetValue("since", out c); x.TryGetValue("level", out d);
-                    r.Add(new List<object>(new object[] { a, b, c, d != null ? Convert.ToString(d).ToLowerInvariant() : null }));
+                    object a, b, c, d, e;
+                    x.TryGetValue("oblast", out a); x.TryGetValue("name", out b); x.TryGetValue("since", out c);
+                    x.TryGetValue("level", out d); x.TryGetValue("reasons", out e);
+                    r.Add(new List<object>(new object[] { a, b, c, Lower(d), NeptunTypes(e) }));
                 }
             if (os != null)
                 foreach (object item in os)
                 {
                     Dictionary<string, object> x = item as Dictionary<string, object>;
                     if (x == null) continue;
-                    object b, c, d;
-                    x.TryGetValue("name", out b); x.TryGetValue("since", out c); x.TryGetValue("level", out d);
-                    o.Add(new List<object>(new object[] { b, c, d != null ? Convert.ToString(d).ToLowerInvariant() : null }));
+                    object b, c, d, e;
+                    x.TryGetValue("name", out b); x.TryGetValue("since", out c);
+                    x.TryGetValue("level", out d); x.TryGetValue("reasons", out e);
+                    o.Add(new List<object>(new object[] { b, c, Lower(d), NeptunTypes(e) }));
                 }
             Dictionary<string, object> nep = new Dictionary<string, object>();
             nep["r"] = r;
             nep["o"] = o;
-            Dictionary<string, object> root = new Dictionary<string, object>();
-            root["neptun"] = nep;
-            CheckResult res = FromRoot(s, root);
-            res.Source = "NEPTUN напряму";
-            return res;
+            return nep;
         }
 
         // Нормалізація назв для порівняння з NEPTUN: апостроф, «м.», Крим
@@ -549,14 +580,17 @@ namespace Trevoga
             if (t.HasValue && (r.Since == null || t.Value < r.Since.Value)) r.Since = t;
         }
 
-        static CheckResult FromServer(Settings s, string server)
+        public static Dictionary<string, object> FetchServer(string server)
         {
             Dictionary<string, object> root = Json.Parse(Download(server + "/status")) as Dictionary<string, object>;
-            if (root == null) throw new Exception("неочікувана відповідь сервера");
-            CheckResult res = FromRoot(s, root);
+            if (root == null || (!root.ContainsKey("air") && !root.ContainsKey("neptun"))) throw new Exception("неочікувана відповідь сервера");
+            return root;
+        }
+
+        public static int PollOf(Dictionary<string, object> root)
+        {
             object p;
-            if (root.TryGetValue("poll", out p) && p != null) res.PollS = ToInt(p);
-            return res;
+            return root != null && root.TryGetValue("poll", out p) && p != null ? ToInt(p) : 0;
         }
 
         static int Sev(string lv) { return lv == "red" ? 2 : lv == "yellow" ? 1 : 0; }
@@ -573,7 +607,9 @@ namespace Trevoga
             }
         }
 
-        static CheckResult FromRoot(Settings s, Dictionary<string, object> root)
+        // ignoreAinBefore: NEPTUN щойно дав відбій — тривоги alerts.in.ua, що почалися раніше, вважаємо застарілими
+        // (alerts.in.ua сервер оновлює раз на 20 с), щоб відбій прозвучав одразу.
+        public static CheckResult FromRoot(Settings s, Dictionary<string, object> root, DateTime? ignoreAinBefore)
         {
             int obl = OblastUid(s.Region);
             if (obl < 0) throw new Exception("невідома область");
@@ -624,6 +660,14 @@ namespace Trevoga
                     }
                 }
                 catch { ain = AlertState.Unknown; }
+            }
+            bool ainIgnored = false;
+            if (ain == AlertState.Alert && ignoreAinBefore.HasValue
+                && (!ainRes.Since.HasValue || ainRes.Since.Value <= ignoreAinBefore.Value))
+            {
+                ain = AlertState.Clear;
+                ainPartial = false;
+                ainIgnored = true;
             }
 
             // --- Джерело 2: NEPTUN (офіційні тривоги UkraineAlarm по районах, з рівнем)
@@ -689,7 +733,11 @@ namespace Trevoga
             if (ain != AlertState.Unknown) names.Add("alerts.in.ua");
             if (nepState != AlertState.Unknown) names.Add("NEPTUN");
             r.Source = string.Join(" + ", names.ToArray());
-            if (ain != AlertState.Unknown && nepState != AlertState.Unknown)
+            r.AinState = ain;
+            r.NepState = nepState;
+            if (ainIgnored && r.State == AlertState.Clear)
+                r.Note = "відбій за NEPTUN (alerts.in.ua ще оновлюється)";
+            else if (ain != AlertState.Unknown && nepState != AlertState.Unknown)
             {
                 if (ain == nepState) r.Note = "джерела збігаються";
                 else if (ainPartial && nepState == AlertState.Alert)
@@ -739,6 +787,261 @@ namespace Trevoga
                     System.Globalization.DateTimeStyles.AssumeLocal, out dt))
                 r.Since = dt;
             return r;
+        }
+    }
+
+    // ---------------- Потік NEPTUN (WebSocket) ----------------
+    // NEPTUN надсилає зміну тривог одразу, без опитування. У .NET 4 на Windows 7 немає ClientWebSocket,
+    // тому — мінімальний WebSocket-клієнт на TcpClient + SslStream (з підтримкою системного проксі).
+    static class NeptunStream
+    {
+        public static string Url = "wss://neptun.in.ua/api/v1/stream";
+        static readonly object lk = new object();
+        static Dictionary<string, object> nep;
+        static string sig = "";
+        static bool connected;
+        static DateTime lastMsg = DateTime.MinValue;
+        static Thread thread;
+        public static string Status = "";
+        /// <summary>Викликається з фонового потоку, коли змінився перелік тривог.</summary>
+        public static event Action Changed;
+
+        /// <summary>Потік підключений, дані отримано, і сервер NEPTUN подавав ознаки життя протягом 45 с.</summary>
+        public static bool Fresh
+        {
+            get { lock (lk) return connected && nep != null && (DateTime.UtcNow - lastMsg).TotalSeconds < 45; }
+        }
+
+        public static Dictionary<string, object> Nep { get { lock (lk) return nep; } }
+
+        public static void Start()
+        {
+            if (thread != null) return;
+            thread = new Thread(Loop);
+            thread.IsBackground = true;
+            thread.Name = "neptun-stream";
+            thread.Start();
+        }
+
+        static void Loop()
+        {
+            int fails = 0;
+            while (true)
+            {
+                DateTime t0 = DateTime.UtcNow;
+                try { RunOnce(); Status = "закрито сервером"; }
+                catch (Exception ex) { Status = AlertSource.Short(ex.Message); }
+                lock (lk) connected = false;
+                if ((DateTime.UtcNow - t0).TotalSeconds > 60) fails = 0;
+                fails++;
+                Thread.Sleep(Math.Min(60, 2 * fails) * 1000);   // 2, 4, 6 … до 60 с
+            }
+        }
+
+        static void ReadFull(Stream st, byte[] b, int n)
+        {
+            int o = 0;
+            while (o < n)
+            {
+                int r = st.Read(b, o, n - o);
+                if (r <= 0) throw new IOException("з'єднання закрито");
+                o += r;
+            }
+        }
+
+        static string ReadHeaders(Stream st)
+        {
+            StringBuilder sb = new StringBuilder();
+            byte[] one = new byte[1];
+            while (sb.Length < 16384)
+            {
+                ReadFull(st, one, 1);
+                sb.Append((char)one[0]);
+                if (sb.Length >= 4 && sb[sb.Length - 1] == '\n' && sb[sb.Length - 2] == '\r' && sb[sb.Length - 3] == '\n' && sb[sb.Length - 4] == '\r')
+                    return sb.ToString();
+            }
+            throw new IOException("завеликі заголовки");
+        }
+
+        static readonly Random rnd = new Random();
+
+        static void Send(Stream st, int op, byte[] data)
+        {
+            MemoryStream f = new MemoryStream();
+            f.WriteByte((byte)(0x80 | op));
+            if (data.Length < 126) f.WriteByte((byte)(0x80 | data.Length));
+            else if (data.Length < 65536) { f.WriteByte(0x80 | 126); f.WriteByte((byte)(data.Length >> 8)); f.WriteByte((byte)data.Length); }
+            else
+            {
+                f.WriteByte(0x80 | 127);
+                for (int i = 7; i >= 0; i--) f.WriteByte((byte)((long)data.Length >> (8 * i)));
+            }
+            byte[] mask = new byte[4];
+            lock (rnd) rnd.NextBytes(mask);
+            f.Write(mask, 0, 4);
+            for (int i = 0; i < data.Length; i++) f.WriteByte((byte)(data[i] ^ mask[i & 3]));
+            byte[] b = f.ToArray();
+            st.Write(b, 0, b.Length);
+            st.Flush();
+        }
+
+        static Uri SystemProxy(Uri target)
+        {
+            try
+            {
+                IWebProxy p = WebRequest.GetSystemWebProxy();
+                if (p == null || p.IsBypassed(target)) return null;
+                Uri pu = p.GetProxy(target);
+                if (pu == null || pu.Host.Equals(target.Host, StringComparison.OrdinalIgnoreCase)) return null;
+                return pu;
+            }
+            catch { return null; }
+        }
+
+        static void RunOnce()
+        {
+            Uri u = new Uri(Url.Replace("wss://", "https://").Replace("ws://", "http://"));
+            string host = u.Host;
+            int port = u.Port;
+            using (TcpClient tcp = new TcpClient())
+            {
+                tcp.NoDelay = true;
+                Uri proxy = SystemProxy(u);
+                NetworkStream ns;
+                if (proxy != null)
+                {
+                    tcp.Connect(proxy.Host, proxy.Port);
+                    ns = tcp.GetStream();
+                    ns.ReadTimeout = 15000;
+                    byte[] c = Encoding.ASCII.GetBytes("CONNECT " + host + ":" + port + " HTTP/1.1\r\nHost: " + host + ":" + port + "\r\n\r\n");
+                    ns.Write(c, 0, c.Length);
+                    string ph = ReadHeaders(ns);
+                    if (!Regex.IsMatch(ph, @"^HTTP/1\.\d 200")) throw new IOException("проксі не пропускає потік");
+                }
+                else
+                {
+                    tcp.Connect(host, port);
+                    ns = tcp.GetStream();
+                }
+                ns.ReadTimeout = 15000;
+                ns.WriteTimeout = 15000;
+                Stream st = ns;
+                SslStream ssl = null;
+                if (u.Scheme == "https")
+                {
+                    ssl = new SslStream(ns, false);
+                    SslProtocols prot;
+                    try { prot = (SslProtocols)3072 | (SslProtocols)768 | SslProtocols.Tls; }
+                    catch { prot = SslProtocols.Tls; }
+                    ssl.AuthenticateAsClient(host, null, prot, true);
+                    st = ssl;
+                }
+                try
+                {
+                    byte[] k = new byte[16];
+                    lock (rnd) rnd.NextBytes(k);
+                    string req = "GET " + u.PathAndQuery + " HTTP/1.1\r\n"
+                        + "Host: " + host + "\r\n"
+                        + "Upgrade: websocket\r\nConnection: Upgrade\r\n"
+                        + "Sec-WebSocket-Key: " + Convert.ToBase64String(k) + "\r\n"
+                        + "Sec-WebSocket-Version: 13\r\n"
+                        + "User-Agent: Trevoga-Win/" + Updater.Current + " (+https://github.com/repaulshadow/spokiy)\r\n\r\n";
+                    byte[] rb = Encoding.ASCII.GetBytes(req);
+                    st.Write(rb, 0, rb.Length);
+                    st.Flush();
+                    string h = ReadHeaders(st);
+                    if (!Regex.IsMatch(h, @"^HTTP/1\.\d 101")) throw new IOException("NEPTUN: " + h.Split('\r')[0]);
+                    ns.ReadTimeout = 50000;      // heartbeat приходить приблизно раз на 15 с
+                    lock (lk) { connected = true; lastMsg = DateTime.UtcNow; }
+                    Status = "підключено";
+
+                    byte[] hdr = new byte[8];
+                    MemoryStream msg = new MemoryStream();
+                    int msgOp = 0;
+                    while (true)
+                    {
+                        ReadFull(st, hdr, 2);
+                        bool fin = (hdr[0] & 0x80) != 0;
+                        int op = hdr[0] & 0x0F;
+                        bool masked = (hdr[1] & 0x80) != 0;
+                        long len = hdr[1] & 0x7F;
+                        if (len == 126) { ReadFull(st, hdr, 2); len = (hdr[0] << 8) | hdr[1]; }
+                        else if (len == 127)
+                        {
+                            ReadFull(st, hdr, 8);
+                            len = 0;
+                            for (int i = 0; i < 8; i++) len = (len << 8) | hdr[i];
+                        }
+                        if (len < 0 || len > 32 * 1024 * 1024) throw new IOException("завелике повідомлення");
+                        byte[] mk = null;
+                        if (masked) { mk = new byte[4]; ReadFull(st, mk, 4); }
+                        byte[] pl = new byte[len];
+                        ReadFull(st, pl, (int)len);
+                        if (masked) for (int i = 0; i < pl.Length; i++) pl[i] ^= mk[i & 3];
+                        lock (lk) lastMsg = DateTime.UtcNow;
+
+                        if (op == 8) { try { Send(st, 8, new byte[0]); } catch { } return; }
+                        if (op == 9) { Send(st, 10, pl); continue; }
+                        if (op == 10) continue;
+                        if (op == 1 || op == 2) { msg.SetLength(0); msgOp = op; }
+                        else if (op != 0) continue;
+                        msg.Write(pl, 0, pl.Length);
+                        if (!fin) continue;
+                        if (msgOp == 1) Handle(Encoding.UTF8.GetString(msg.GetBuffer(), 0, (int)msg.Length));
+                        msg.SetLength(0);
+                    }
+                }
+                finally { if (ssl != null) ssl.Dispose(); }
+            }
+        }
+
+        static void Handle(string text)
+        {
+            // Потік надсилає й треки дронів (великі повідомлення) — розбираємо лише «alerts»
+            string head = text.Length > 200 ? text.Substring(0, 200) : text;
+            Match m = Regex.Match(head, "\"type\"\\s*:\\s*\"([A-Za-z_]+)\"");
+            if (m.Success ? m.Groups[1].Value != "alerts" : text.IndexOf("\"raions\"", StringComparison.Ordinal) < 0) return;
+            Dictionary<string, object> j = Json.Parse(text) as Dictionary<string, object>;
+            if (j == null) return;
+            object d;
+            Dictionary<string, object> data = j.TryGetValue("data", out d) ? d as Dictionary<string, object> : j;
+            Dictionary<string, object> n = AlertSource.NeptunToNep(data);
+            if (n == null) return;
+            string s2 = Signature(n);
+            bool changed;
+            lock (lk)
+            {
+                changed = nep == null || s2 != sig;
+                nep = n;
+                sig = s2;
+                connected = true;
+            }
+            if (changed)
+            {
+                Action h = Changed;
+                if (h != null) try { h(); } catch { }
+            }
+        }
+
+        static string Signature(Dictionary<string, object> n)
+        {
+            StringBuilder sb = new StringBuilder();
+            foreach (string key in new string[] { "r", "o" })
+            {
+                sb.Append(key).Append(':');
+                foreach (object e in (List<object>)n[key])
+                {
+                    foreach (object x in (List<object>)e)
+                    {
+                        List<object> l = x as List<object>;
+                        if (l != null) foreach (object t in l) sb.Append(t).Append(',');
+                        else sb.Append(x);
+                        sb.Append('|');
+                    }
+                    sb.Append('\n');
+                }
+            }
+            return sb.ToString();
         }
     }
 
@@ -1469,6 +1772,10 @@ namespace Trevoga
                 re.Start();
             }
 
+            // Потік NEPTUN: тривога і відбій приходять одразу, без очікування наступного опитування
+            NeptunStream.Changed += OnStreamChanged;
+            NeptunStream.Start();
+
             timer = new System.Windows.Forms.Timer();
             timer.Interval = settings.Interval * 1000;
             timer.Tick += delegate { CheckNow(); };
@@ -1697,6 +2004,15 @@ namespace Trevoga
             base.OnFormClosing(e);
         }
 
+        // Останні дані сервера (alerts.in.ua + NEPTUN); зводяться з потоком NEPTUN у Recompute()
+        Dictionary<string, object> lastRoot;
+        DateTime lastRootAt = DateTime.MinValue;
+        string lastServerError = null;
+        // Відстеження відбою за потоком NEPTUN
+        string nepKey = "";
+        AlertState prevNep = AlertState.Unknown;
+        DateTime? nepClearedAt;
+
         void CheckNow()
         {
             if (checking) return;
@@ -1706,20 +2022,83 @@ namespace Trevoga
             string srv = server;
             ThreadPool.QueueUserWorkItem(delegate
             {
-                CheckResult result = null;
+                Dictionary<string, object> root = null;
+                string serverError = null;
+                CheckResult fallback = null;
                 string error = null;
-                try { result = AlertSource.Check(snapshot, srv); }
-                catch (Exception ex) { error = ex.Message; }
+                if (!string.IsNullOrEmpty(srv))
+                {
+                    try { root = AlertSource.FetchServer(srv); }
+                    catch (Exception ex) { serverError = AlertSource.Short(ex.Message); }
+                }
+                // Без сервера і без потоку NEPTUN — запасні джерела
+                if (root == null && !NeptunStream.Fresh)
+                {
+                    try { fallback = AlertSource.Fallback(snapshot, serverError); }
+                    catch (Exception ex) { error = ex.Message; }
+                }
                 try
                 {
                     BeginInvoke((MethodInvoker)delegate
                     {
                         checking = false;
-                        if (myId == requestId) ApplyResult(result, error);
+                        if (myId != requestId) return;
+                        if (root != null) { lastRoot = root; lastRootAt = DateTime.UtcNow; lastServerError = null; }
+                        else lastServerError = serverError ?? "сервер ще не налаштовано";
+                        if (root == null && !NeptunStream.Fresh) ApplyResult(fallback, error);
+                        else Recompute();
                     });
                 }
                 catch { checking = false; }
             });
+        }
+
+        /// <summary>Зведення без мережі: останні дані сервера + свіжий потік NEPTUN. Викликається на кожну зміну в потоці.</summary>
+        void Recompute()
+        {
+            bool live = NeptunStream.Fresh;
+            Dictionary<string, object> nep = live ? NeptunStream.Nep : null;
+            Dictionary<string, object> root = new Dictionary<string, object>();
+            bool rootFresh = lastRoot != null && (DateTime.UtcNow - lastRootAt).TotalSeconds < 90;
+            if (rootFresh) foreach (KeyValuePair<string, object> kv in lastRoot) root[kv.Key] = kv.Value;
+            if (nep != null) root["neptun"] = nep;
+            if (!root.ContainsKey("air") && !root.ContainsKey("neptun")) return;   // даних немає — дочекаємося опитування
+
+            string key = settings.Region + "|" + settings.Raion + "|" + settings.Partial;
+            if (key != nepKey) { nepKey = key; prevNep = AlertState.Unknown; nepClearedAt = null; }
+            if (nepClearedAt.HasValue && (DateTime.Now - nepClearedAt.Value).TotalSeconds > 90) nepClearedAt = null;
+
+            CheckResult r;
+            try
+            {
+                r = AlertSource.FromRoot(settings, root, live ? nepClearedAt : null);
+                if (live)
+                {
+                    // NEPTUN (офіційна тривога) щойно дав відбій — не чекаємо, поки оновиться alerts.in.ua
+                    if (prevNep == AlertState.Alert && r.NepState == AlertState.Clear)
+                    {
+                        nepClearedAt = DateTime.Now;
+                        r = AlertSource.FromRoot(settings, root, nepClearedAt);
+                    }
+                    else if (r.NepState == AlertState.Alert) nepClearedAt = null;
+                    prevNep = r.NepState;
+                }
+            }
+            catch (Exception ex) { ApplyResult(null, ex.Message); return; }
+            r.PollS = rootFresh ? AlertSource.PollOf(lastRoot) : 0;
+            if (live) r.Source = r.Source.Replace("NEPTUN", "NEPTUN наживо");
+            if (lastServerError != null)
+                r.Note = "сервер недоступний (" + lastServerError + ")" + (r.Note.Length > 0 ? " · " + r.Note : "");
+            ApplyResult(r, null);
+        }
+
+        void OnStreamChanged()
+        {
+            try
+            {
+                if (IsHandleCreated) BeginInvoke((MethodInvoker)delegate { Recompute(); });
+            }
+            catch { }
         }
 
         static string Ago(DateTime t)
