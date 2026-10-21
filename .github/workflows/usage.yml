@@ -1,0 +1,75 @@
+name: Server usage (Cloudflare)
+
+# Статистика нагрузки сервера: Actions -> "Server usage (Cloudflare)" -> Run workflow.
+on:
+  workflow_dispatch:
+
+jobs:
+  usage:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    env:
+      CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
+    steps:
+      - uses: actions/checkout@v5
+
+      - name: Query Cloudflare analytics
+        run: |
+          python3 - <<'EOF'
+          import json, os, re, urllib.request, datetime as dt
+
+          acc = re.search(r'account_id\s*=\s*"([0-9a-f]{32})"', open("server/wrangler.toml").read()).group(1)
+          now = dt.datetime.now(dt.timezone.utc).replace(microsecond=0)
+          day_start = now.replace(hour=0, minute=0, second=0)
+          frm = now - dt.timedelta(hours=24)
+
+          q = """
+          query($acc: String!, $from: Time!, $to: Time!, $day: Time!) {
+            viewer { accounts(filter: {accountTag: $acc}) {
+              last24: workersInvocationsAdaptive(limit: 10, filter: {datetime_geq: $from, datetime_leq: $to, scriptName: "trevoga"}) {
+                sum { requests errors subrequests }
+              }
+              today: workersInvocationsAdaptive(limit: 10, filter: {datetime_geq: $day, datetime_leq: $to, scriptName: "trevoga"}) {
+                sum { requests errors subrequests }
+              }
+              hourly: workersInvocationsAdaptive(limit: 30, filter: {datetime_geq: $from, datetime_leq: $to, scriptName: "trevoga"}, orderBy: [datetimeHour_ASC]) {
+                sum { requests }
+                dimensions { datetimeHour }
+              }
+              doLast24: durableObjectsInvocationsAdaptiveGroups(limit: 10, filter: {datetime_geq: $from, datetime_leq: $to}) {
+                sum { requests }
+              }
+            } }
+          }"""
+          body = json.dumps({"query": q, "variables": {
+              "acc": acc, "from": frm.isoformat().replace("+00:00", "Z"),
+              "to": now.isoformat().replace("+00:00", "Z"),
+              "day": day_start.isoformat().replace("+00:00", "Z")}}).encode()
+          req = urllib.request.Request("https://api.cloudflare.com/client/v4/graphql", data=body, headers={
+              "Authorization": "Bearer " + os.environ["CLOUDFLARE_API_TOKEN"], "Content-Type": "application/json"})
+          res = json.load(urllib.request.urlopen(req, timeout=30))
+          if res.get("errors"):
+              msg = "; ".join(e.get("message", "") for e in res["errors"])
+              print("::error::Cloudflare GraphQL: " + msg[:900])
+              raise SystemExit(1)
+          a = res["data"]["viewer"]["accounts"][0]
+
+          def tot(rows, key="requests"):
+              return sum(r["sum"].get(key, 0) or 0 for r in rows)
+
+          l24 = tot(a["last24"]); err = tot(a["last24"], "errors"); sub = tot(a["last24"], "subrequests")
+          today = tot(a["today"]); do24 = tot(a["doLast24"])
+          hours = [(r["dimensions"]["datetimeHour"][11:16], r["sum"]["requests"]) for r in a["hourly"]]
+          peak = max((h for h in hours), key=lambda x: x[1], default=("-", 0))
+          lines = [
+              f"За последние 24 ч: {l24} запросов к серверу (ошибок {err}, исходящих запросов {sub})",
+              f"С 00:00 UTC сегодня: {today} (лимит Free: 100000 в сутки, сброс в 00:00 UTC = 03:00 по Киеву)",
+              f"Durable Object за 24 ч: {do24} запросов",
+              f"Пиковый час (UTC): {peak[0]} — {peak[1]} запросов",
+              "По часам (UTC): " + ", ".join(f"{h} {n}" for h, n in hours),
+          ]
+          for ln in lines:
+              print("::notice title=usage::" + ln)
+          with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
+              f.write("\n".join("- " + ln for ln in lines) + "\n")
+          EOF
