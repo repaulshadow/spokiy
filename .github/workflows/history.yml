@@ -29,6 +29,8 @@ jobs:
       HOURS: ${{ inputs.hours }}
       TG: ${{ inputs.tg }}
     steps:
+      - uses: actions/checkout@v5
+
       - name: Fetch history
         run: |
           python3 - <<'EOF'
@@ -76,4 +78,23 @@ jobs:
               text = html.unescape(re.sub(r"<[^>]+>", " ", text)).strip()
               if "тривог" in text.lower() or "відбій" in text.lower():
                   print(f"::notice title=telegram (час київський)::{post}: {t:%d.%m %H:%M:%S} — {text[:90]}")
+          EOF
+
+      - name: Our server log
+        run: |
+          python3 - <<'EOF'
+          import json, os, urllib.request, urllib.parse, datetime as dt
+          server = json.load(open("config.json"))["server"]
+          q = urllib.parse.quote(os.environ["FLT"])
+          data = json.load(urllib.request.urlopen(server + "/log?q=" + q, timeout=30))
+          kyiv = dt.timezone(dt.timedelta(hours=3))
+          since = dt.datetime.now(dt.timezone.utc) - dt.timedelta(hours=int(os.environ["HOURS"]))
+          n = 0
+          for e in data.get("events", []):
+              t = dt.datetime.fromisoformat(e["t"].replace("Z", "+00:00"))
+              if t < since: continue
+              n += 1
+              print(f"::notice title=наш сервер (час київський)::{t.astimezone(kyiv):%d.%m %H:%M:%S} — {e['src']}: {e['e']} — {e['k']}")
+          if not n:
+              print("::notice title=наш сервер::подій немає (журнал ведеться з моменту оновлення сервера)")
           EOF

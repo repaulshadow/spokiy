@@ -39,6 +39,12 @@ export default {
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
     if (request.method !== "GET") return json({ ok: false, error: "method" }, 405);
 
+    if (url.pathname === "/log") {
+      // журнал: коли сервер дізнався про початок/кінець тривоги з кожного джерела
+      const id = env.ALERTS.idFromName("ua");
+      const r = await env.ALERTS.get(id).fetch("https://do/log" + url.search);
+      return new Response(r.body, { status: r.status, headers: { "Content-Type": "application/json; charset=utf-8", ...CORS } });
+    }
     if (url.pathname === "/" || url.pathname === "/health") {
       // состояние сервера: когда последний раз удалось получить данные и последняя ошибка
       const id = env.ALERTS.idFromName("ua");
@@ -90,8 +96,13 @@ export class AlertsHub {
   async load() {
     if (this.loaded) return;
     const m = await this.state.storage.get(["ain", "nep"]);
+    this.events = [];
+    this.seen = {};
     if (m.get("ain")) this.ain = m.get("ain");
     if (m.get("nep")) this.nep = m.get("nep");
+    const lg = await this.state.storage.get(["events", "seen"]);
+    this.events = lg.get("events") || [];
+    this.seen = lg.get("seen") || {};
     this.loaded = true;
   }
 
@@ -112,7 +123,13 @@ export class AlertsHub {
       await this.pending;
       now = Date.now();
     }
-    if (new URL(request.url).pathname === "/health") {
+    const reqUrl = new URL(request.url);
+    if (reqUrl.pathname === "/log") {
+      const q = (reqUrl.searchParams.get("q") || "").toLowerCase();
+      const ev = (this.events || []).filter((e) => !q || e.k.toLowerCase().includes(q));
+      return json({ ok: true, now: new Date(now).toISOString(), events: ev.slice(-300) });
+    }
+    if (reqUrl.pathname === "/health") {
       return json({
         ok: !!(this.fresh(this.ain, now) || this.fresh(this.nep, now)),
         service: "trevoga",
@@ -252,6 +269,49 @@ export class AlertsHub {
     if (d.ain) jobs.push(run(this.ain, "ain", () => this.fromAlertsInUa()));
     if (d.nep) jobs.push(run(this.nep, "nep", () => this.fromNeptun()));
     await Promise.all(jobs);
+    if (d.ain && toSave.ain && !this.ain.err) this.track("alerts.in.ua", this.keysAin());
+    if (d.nep && toSave.nep && !this.nep.err) this.track("NEPTUN", this.keysNep());
+    if (this.dirtyLog) { toSave.events = this.events; toSave.seen = this.seen; this.dirtyLog = false; }
     try { await this.state.storage.put(toSave); } catch (e) { /* не критично */ }
+  }
+
+  // Ключі активних тривог для журналу
+  keysAin() {
+    const out = new Set();
+    const air = this.ain.val && this.ain.val.air;
+    if (air) for (let i = 0; i < air.length; i++) {
+      const c = air[i];
+      if (c === "A" || c === "P") out.add("uid " + i + (c === "P" ? " (частково)" : ""));
+    }
+    for (const a of (this.ain.val && this.ain.val.alerts) || []) {
+      if (a.r) out.add(a.r + " · " + (a.on || "") + " · " + (a.l || ""));
+    }
+    return out;
+  }
+
+  keysNep() {
+    const out = new Set();
+    const n = this.nep.val;
+    if (!n) return out;
+    for (const r of n.r || []) out.add(r[1] + " · " + r[0] + " · " + (r[3] || ""));
+    for (const o of n.o || []) out.add(o[0] + " · " + (o[2] || ""));
+    return out;
+  }
+
+  // Порівнюємо з попереднім станом джерела і записуємо початок/кінець
+  track(src, keys) {
+    const prev = new Set(this.seen[src] || []);
+    const now = new Date().toISOString();
+    const first = !this.seen[src];
+    if (!first) {
+      for (const k of keys) if (!prev.has(k)) this.events.push({ t: now, src, k, e: "тривога" });
+      for (const k of prev) if (!keys.has(k)) this.events.push({ t: now, src, k, e: "відбій" });
+      if (this.events.length > 600) this.events = this.events.slice(-600);
+    }
+    const arr = Array.from(keys);
+    if (first || arr.length !== prev.size || arr.some((k) => !prev.has(k))) {
+      this.seen[src] = arr;
+      this.dirtyLog = true;
+    }
   }
 }
