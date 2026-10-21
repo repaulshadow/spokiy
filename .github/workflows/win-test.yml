@@ -18,4 +18,4 @@ jobs:
       - name: Build
         run: mcs -nologo -langversion:6 -target:exe -main:Trevoga.StreamTest -r:System.Windows.Forms.dll -r:System.Drawing.dll -resource:config.json,config.json -out:st.exe Trevoga.cs test/StreamTest.cs
       - name: Run
-        run: mono st.exe ${{ inputs.seconds }} "$(python3 -c 'import json;print(json.load(open("config.json"))["server"])')"
+        run: mono st.exe ${{ inputs.seconds }} "$(python3 -c 'import json;print(json.load(open("config.json"))["server"])')" 2>&1 | sed "s/^/::notice::/"
