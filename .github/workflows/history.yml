@@ -14,6 +14,9 @@ on:
       hours:
         description: "За скільки годин"
         default: "24"
+      tg:
+        description: "Telegram-канал для порівняння (напр. tairoverada), можна порожньо"
+        default: ""
 
 jobs:
   history:
@@ -24,6 +27,7 @@ jobs:
       OBL: ${{ inputs.oblast_uid }}
       FLT: ${{ inputs.raion }}
       HOURS: ${{ inputs.hours }}
+      TG: ${{ inputs.tg }}
     steps:
       - name: Fetch history
         run: |
@@ -56,4 +60,20 @@ jobs:
               print("::notice title=history::Нічого не знайдено")
           for _, line in rows[-40:]:
               print("::notice title=history (час київський)::" + line)
+          EOF
+
+      - name: Telegram post times
+        if: ${{ inputs.tg != '' }}
+        run: |
+          python3 - <<'EOF'
+          import os, re, urllib.request, datetime as dt, html
+          ch = os.environ["TG"]
+          page = urllib.request.urlopen(urllib.request.Request("https://t.me/s/" + ch, headers={"User-Agent": "Mozilla/5.0"}), timeout=30).read().decode("utf-8", "replace")
+          kyiv = dt.timezone(dt.timedelta(hours=3))
+          for m in re.finditer(r'data-post="([^"]+)".*?(?:tgme_widget_message_text[^>]*>(.*?)</div>).*?<time datetime="([^"]+)"', page, re.S):
+              post, text, ts = m.group(1), m.group(2), m.group(3)
+              t = dt.datetime.fromisoformat(ts).astimezone(kyiv)
+              text = html.unescape(re.sub(r"<[^>]+>", " ", text)).strip()
+              if "тривог" in text.lower() or "відбій" in text.lower():
+                  print(f"::notice title=telegram (час київський)::{post}: {t:%d.%m %H:%M:%S} — {text[:90]}")
           EOF
