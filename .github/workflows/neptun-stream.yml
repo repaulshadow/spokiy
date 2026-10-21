@@ -7,7 +7,7 @@ on:
 jobs:
   probe:
     runs-on: ubuntu-latest
-    timeout-minutes: 5
+    timeout-minutes: 9
     steps:
       - name: Probe
         run: |
@@ -19,7 +19,7 @@ jobs:
               t0 = time.time()
               async with websockets.connect("wss://neptun.in.ua/api/v1/stream", open_timeout=20,
                                             extra_headers={"User-Agent": "Trevoga/1.0 (+https://github.com/repaulshadow/spokiy)"}) as ws:
-                  while time.time() - t0 < 75:
+                  while time.time() - t0 < 330:
                       try:
                           raw = await asyncio.wait_for(ws.recv(), timeout=80)
                       except asyncio.TimeoutError:
@@ -30,7 +30,11 @@ jobs:
                           print("::notice title=non-json::" + str(raw)[:300]); continue
                       typ = m.get("type")
                       seen[typ] = seen.get(typ, 0) + 1
-                      if seen[typ] <= 2:
+                      if typ == "alerts":
+                          d = m.get("data") or {}
+                          print(f"::notice title=alerts (+{time.time()-t0:.1f}s)::ts={m.get('ts')} version={d.get('version')} updatedAt={d.get('updatedAt')} raions={len(d.get('raions') or [])} oblasts={len(d.get('oblasts') or [])}")
+                          continue
+                      if seen[typ] <= 1:
                           d = m.get("data")
                           info = {"keys": list(m.keys()), "ts": m.get("ts"), "data_type": type(d).__name__}
                           if isinstance(d, dict):
