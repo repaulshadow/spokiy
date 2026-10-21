@@ -18,7 +18,8 @@ const NEPTUN_DEFAULT = "https://neptun.in.ua";
 const AIN_MS = 20000;          // alerts.in.ua: 2 запити раз на 20 с = 6 на хвилину (їхній ліміт 8–10)
 const NEP_MS = 5000;           // NEPTUN: не частіше ніж раз на 5 с (їхня умова)
 const STALE_MS = 120000;       // дані джерела старші за 2 хв вважаємо недійсними
-const EDGE_CACHE_S = 3;        // кеш на краю Cloudflare, щоб не будити Durable Object на кожен запит
+const EDGE_CACHE_S = 2;        // кеш на краю Cloudflare, щоб не будити Durable Object на кожен запит
+const POLL_S = 10;             // як часто програми опитують сервер (секунд); змінюється тут, без оновлення програм
 
 const CORS = {
   "Access-Control-Allow-Origin": "*",
@@ -135,6 +136,7 @@ export class AlertsHub {
     }
     const body = JSON.stringify({
       ok: true,
+      poll: Number(this.env.POLL_S) || POLL_S,
       updated: new Date(Math.max(this.ain.okAt, this.nep.okAt)).toISOString(),
       air: a ? a.air : null,
       alerts: a ? a.alerts : [],

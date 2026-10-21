@@ -20,7 +20,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("2.8.0.0")]
+[assembly: System.Reflection.AssemblyVersion("2.9.0.0")]
 
 namespace Trevoga
 {
@@ -69,7 +69,7 @@ namespace Trevoga
     {
         public string Region = "м. Київ";
         public int Raion = 0;              // uid району alerts.in.ua, 0 = вся область
-        public int Interval = 15;          // секунд між перевірками
+        public int Interval = 10;          // секунд між перевірками (сервер може змінити)
         public bool Partial = false;       // вважати тривогою часткову (окремі громади)
         public bool Sound = true;
         public string Voice = "tetiana";   // tetiana, mykyta, off
@@ -105,7 +105,7 @@ namespace Trevoga
                 }
             }
             catch { }
-            if (s.Interval == 20) s.Interval = 15;   // старе значення за замовчуванням (до 2.5)
+            if (s.Interval == 20 || s.Interval == 15) s.Interval = 10;   // старі значення за замовчуванням
             if (s.Interval < 10) s.Interval = 10;
             return s;
         }
@@ -270,6 +270,7 @@ namespace Trevoga
         public string Source = "";
         public string Note = "";         // пояснення: сервер недоступний, збіг джерел тощо
         public bool Disagree = false;    // джерела показують різне
+        public int PollS = 0;            // рекомендована сервером частота опитування, с
         public string Level = "";        // рівень тривоги: "red" | "yellow" | "" (невідомо)
     }
 
@@ -460,7 +461,10 @@ namespace Trevoga
         {
             Dictionary<string, object> root = Json.Parse(Download(server + "/status")) as Dictionary<string, object>;
             if (root == null) throw new Exception("неочікувана відповідь сервера");
-            return FromRoot(s, root);
+            CheckResult res = FromRoot(s, root);
+            object p;
+            if (root.TryGetValue("poll", out p) && p != null) res.PollS = ToInt(p);
+            return res;
         }
 
         static int Sev(string lv) { return lv == "red" ? 2 : lv == "yellow" ? 1 : 0; }
@@ -1639,6 +1643,7 @@ namespace Trevoga
             }
             lastNote = r.Note;
             lastDisagree = r.Disagree;
+            if (r.PollS >= 5 && r.PollS <= 120 && timer.Interval != r.PollS * 1000) timer.Interval = r.PollS * 1000;
             lastSource = r.Source;
             lastTime = DateTime.Now.ToString("HH:mm:ss");
 

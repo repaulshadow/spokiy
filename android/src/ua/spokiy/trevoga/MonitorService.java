@@ -19,9 +19,10 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-/** Фоновий сервіс: раз на 15 секунд перевіряє тривогу і грає звук при зміні статусу. */
+/** Фоновий сервіс: раз на 10 секунд (або як скаже сервер) перевіряє тривогу і грає звук при зміні статусу. */
 public class MonitorService extends Service {
-    static final int INTERVAL_MS = 15000;
+    static final int INTERVAL_MS = 10000;
+    private int intervalMs = INTERVAL_MS;   // сервер може змінити частоту
     static final int NOTIF_STATUS = 1, NOTIF_ALERT = 2;
     static final String ACTION_CHECK = "ua.spokiy.trevoga.CHECK";
     static final String ACTION_STOP_SOUND = "ua.spokiy.trevoga.STOP_SOUND";
@@ -73,7 +74,7 @@ public class MonitorService extends Service {
     private final Runnable loop = new Runnable() {
         public void run() {
             try { checkOnce(); } catch (Throwable ignored) { }
-            handler.postDelayed(this, INTERVAL_MS);
+            handler.postDelayed(this, intervalMs);
         }
     };
 
@@ -103,6 +104,7 @@ public class MonitorService extends Service {
         AlertSource.Result r;
         try {
             r = AlertSource.check(AlertSource.server(this), region, raion, partial);
+            if (r.pollS >= 5 && r.pollS <= 120) intervalMs = r.pollS * 1000;
         } catch (Exception e) {
             p.edit().putString(Prefs.ERROR, e.getMessage()).apply();
             updateStatus(p.getInt(Prefs.STATE, AlertSource.UNKNOWN), Prefs.place(this), true);

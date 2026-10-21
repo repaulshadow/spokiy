@@ -50,6 +50,7 @@ final class AlertSource {
         String note = "";
         boolean disagree = false;
         String level = "";       // рівень тривоги: "red" | "yellow" | "" (невідомо)
+        int pollS = 0;           // рекомендована сервером частота опитування, с
     }
 
     static int indexOf(String region) {
@@ -263,7 +264,10 @@ final class AlertSource {
     }
 
     static Result fromServer(String server, String region, int raion, boolean partial) throws Exception {
-        return fromRoot(new JSONObject(download(server + "/status")), region, raion, partial);
+        JSONObject root = new JSONObject(download(server + "/status"));
+        Result r = fromRoot(root, region, raion, partial);
+        r.pollS = root.optInt("poll", 0);
+        return r;
     }
 
     private static int sev(String lv) { return "red".equals(lv) ? 2 : "yellow".equals(lv) ? 1 : 0; }
