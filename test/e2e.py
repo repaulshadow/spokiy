@@ -322,6 +322,7 @@ def main():
         expect("Відкат", r"ROLLBACK v9\.9\.9\.10", 20, m)
         expect("Попередня версія знову працює", r"START v9\.9\.9\.9 .*/rolledback", 30, m)
         expect("Після відкату — тиша", r"STATE Clear", 30, m)
+        m = mark()
         expect_none("Зламану версію не ставить вдруге", r"START v9\.9\.9\.10", 35, m)
 
     if V9999 and VHANG:
