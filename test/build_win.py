@@ -5,6 +5,7 @@ ap = argparse.ArgumentParser()
 ap.add_argument("out"); ap.add_argument("--main"); ap.add_argument("--version"); ap.add_argument("--mutate")
 ap.add_argument("extra", nargs="*")
 a = ap.parse_args()
+os.makedirs(os.path.dirname(os.path.abspath(a.out)), exist_ok=True)
 root = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 src = open(os.path.join(root, "Trevoga.cs"), encoding="utf-8-sig").read()
 if a.version:
