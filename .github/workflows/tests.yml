@@ -13,6 +13,10 @@ on:
         default: "Trevoga.exe"
   workflow_call:
 
+env:
+  PYTHONUTF8: "1"
+  PYTHONIOENCODING: utf-8
+
 jobs:
   names:
     name: Назви районів = NEPTUN
@@ -30,17 +34,17 @@ jobs:
       - uses: actions/checkout@v5
       - name: Збірка (стандартний csc .NET Framework 4, як build.bat)
         run: |
-          python test/build_win.py build/Trevoga.exe
-          python test/build_win.py build/ut.exe --main Trevoga.Tests test/UnitTests.cs
-          python test/build_win.py build/st.exe --main Trevoga.StreamTests test/StreamTests.cs
+          python test/run.py python test/build_win.py build/Trevoga.exe
+          python test/run.py python test/build_win.py build/ut.exe --main Trevoga.Tests test/UnitTests.cs
+          python test/run.py python test/build_win.py build/st.exe --main Trevoga.StreamTests test/StreamTests.cs
       - name: Модульні тести
-        run: build/ut.exe
+        run: python test/run.py build/ut.exe
       - name: WebSocket-клієнт проти «незручного» сервера
         shell: bash
         run: |
           python test/fake_ws.py 8788 build/ws_res.json &
           sleep 2
-          build/st.exe ws://127.0.0.1:8788/api/v1/stream 120
+          python test/run.py build/st.exe ws://127.0.0.1:8788/api/v1/stream 120
           cat build/ws_res.json
           python -c "import json,sys; r=json.load(open('build/ws_res.json')); ok=r['pong_ok'] and r['close_reply_ok'] and r['client_masked'] and r['handshake_ok'] and not r['errors'] and r['connections']>=5; print('сервер: OK' if ok else 'сервер: FAIL'); sys.exit(0 if ok else 1)"
 
@@ -52,14 +56,14 @@ jobs:
       - uses: actions/checkout@v5
       - name: Тестові версії для оновлення (9.9.9.9 / зламана / зависає)
         run: |
-          python test/build_win.py build/v9999.exe --version 9.9.9.9
-          python test/build_win.py build/vbad.exe --version 9.9.9.10 --mutate bad
-          python test/build_win.py build/vhang.exe --version 9.9.9.11 --mutate hang
+          python test/run.py python test/build_win.py build/v9999.exe --version 9.9.9.9
+          python test/run.py python test/build_win.py build/vbad.exe --version 9.9.9.10 --mutate bad
+          python test/run.py python test/build_win.py build/vhang.exe --version 9.9.9.11 --mutate hang
       - name: Зібрати з Trevoga.cs (якщо обрано source)
         if: ${{ inputs.exe == 'source' }}
-        run: python test/build_win.py Trevoga.exe
+        run: python test/run.py python test/build_win.py Trevoga.exe
       - name: Сценарій (той самий Trevoga.exe, що лежить у репозиторії)
-        run: python test/e2e.py Trevoga.exe build/e2e build/v9999.exe build/vbad.exe build/vhang.exe
+        run: python test/run.py python test/e2e.py Trevoga.exe build/e2e build/v9999.exe build/vbad.exe build/vhang.exe
       - name: Журнал програми
         if: always()
         uses: actions/upload-artifact@v4
@@ -74,10 +78,10 @@ jobs:
     steps:
       - uses: actions/checkout@v5
       - name: Збірка
-        run: python test/build_win.py build/live.exe --main Trevoga.LiveTest test/LiveTest.cs
+        run: python test/run.py python test/build_win.py build/live.exe --main Trevoga.LiveTest test/LiveTest.cs
       - name: Напряму
         shell: bash
-        run: build/live.exe 40 "$(python -c 'import json;print(json.load(open("config.json"))["server"])')"
+        run: python test/run.py build/live.exe 40 "$(python -c 'import json;print(json.load(open("config.json"))["server"])')"
       - name: Через системний проксі (як у закладі з проксі)
         shell: bash
         run: |
@@ -85,7 +89,7 @@ jobs:
           sleep 2
           reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" //v ProxyEnable //t REG_DWORD //d 1 //f
           reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" //v ProxyServer //t REG_SZ //d 127.0.0.1:3128 //f
-          build/live.exe 40 "$(python -c 'import json;print(json.load(open("config.json"))["server"])')"
+          python test/run.py build/live.exe 40 "$(python -c 'import json;print(json.load(open("config.json"))["server"])')"
           reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" //v ProxyEnable //t REG_DWORD //d 0 //f
           echo "--- проксі бачив:"; sort -u build/proxy.log
           grep -q "CONNECT neptun.in.ua:443" build/proxy.log || { echo "::error::потік NEPTUN пішов повз проксі"; exit 1; }
@@ -100,8 +104,8 @@ jobs:
       - uses: actions/checkout@v5
       - run: pip install psutil
       - if: ${{ inputs.exe == 'source' }}
-        run: python test/build_win.py Trevoga.exe
-      - run: python test/soak.py Trevoga.exe build/soak ${{ inputs.soak_minutes }}
+        run: python test/run.py python test/build_win.py Trevoga.exe
+      - run: python test/run.py python test/soak.py Trevoga.exe build/soak ${{ inputs.soak_minutes }}
       - if: always()
         uses: actions/upload-artifact@v4
         with:

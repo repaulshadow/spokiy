@@ -104,6 +104,7 @@ namespace Trevoga
 
         static void Main()
         {
+            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
             Stopwatch sw = Stopwatch.StartNew();
             TestJson();
             TestNorm();

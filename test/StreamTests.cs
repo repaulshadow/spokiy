@@ -10,6 +10,7 @@ namespace Trevoga
     {
         static void Main(string[] args)
         {
+            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
             NeptunStream.Url = args[0];
             int secs = int.Parse(args[1]);
             DateTime t0 = DateTime.UtcNow;

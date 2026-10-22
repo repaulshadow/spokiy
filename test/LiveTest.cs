@@ -11,6 +11,7 @@ namespace Trevoga
     {
         static void Main(string[] args)
         {
+            try { Console.OutputEncoding = System.Text.Encoding.UTF8; } catch { }
             try { ServicePointManager.SecurityProtocol = (SecurityProtocolType)3072 | (SecurityProtocolType)768 | SecurityProtocolType.Tls; } catch { }
             int secs = int.Parse(args[0]);
             string server = args[1];
