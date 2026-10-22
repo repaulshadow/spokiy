@@ -1,0 +1,22 @@
+name: Tests
+
+# Автотести програми для Windows. Запускаються самі при зміні Trevoga.cs / Trevoga.exe / test/**,
+# а також вручну (Actions -> Tests -> Run workflow; «soak» — довга перевірка пам'яті).
+on:
+  push:
+    paths: ["Trevoga.cs", "Trevoga.exe", "test/**", ".github/workflows/tests.yml"]
+  workflow_dispatch:
+    inputs:
+      soak_minutes:
+        description: "Тривалість soak-тесту, хв (0 = не запускати)"
+        default: "0"
+  workflow_call:
+
+jobs:
+  names:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - name: Назви районів збігаються з NEPTUN
+        run: python3 test/check_names.py
