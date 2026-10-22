@@ -30,8 +30,8 @@ for path, ours in (("/raions.geojson", [(obl_by_uid.get(o, "?"), n) for n, o in 
     print(f"::notice title={path}::{len(props)} features, properties keys: {sorted(props[0].keys()) if props else []}, sample: {json.dumps(props[0], ensure_ascii=False)[:300] if props else ''}")
     names = set()
     for p in props:
-        nm = p.get("name") or p.get("NAME") or p.get("title") or ""
-        ob = p.get("oblast") or p.get("region") or ""
+        nm = p.get("rayon") or p.get("region") or p.get("name") or ""
+        ob = p.get("oblast") or ""
         names.add(norm(nm))
         if ob: names.add(norm(ob) + "|" + norm(nm))
     missing = [f"{o} / {n}" for o, n in ours if norm(n) not in names]
