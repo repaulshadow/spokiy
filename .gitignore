@@ -1,2 +1,3 @@
 Trevoga.zip
 *.pdb
+__pycache__/

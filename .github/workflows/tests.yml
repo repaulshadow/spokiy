@@ -1,22 +1,111 @@
 name: Tests
 
-# Автотести програми для Windows. Запускаються самі при зміні Trevoga.cs / Trevoga.exe / test/**,
-# а також вручну (Actions -> Tests -> Run workflow; «soak» — довга перевірка пам'яті).
+# Автотести програми для Windows (див. test/). Запускаються перед кожною публікацією нової версії
+# (з workflow «Deploy server») і вручну: Actions -> Tests -> Run workflow.
 on:
-  push:
-    paths: ["Trevoga.cs", "Trevoga.exe", "test/**", ".github/workflows/tests.yml"]
   workflow_dispatch:
     inputs:
       soak_minutes:
-        description: "Тривалість soak-тесту, хв (0 = не запускати)"
+        description: "Тривалість довгого тесту пам'яті, хв (0 = не запускати)"
         default: "0"
+      exe:
+        description: "Що тестувати: Trevoga.exe з репозиторію або source (зібрати з Trevoga.cs)"
+        default: "Trevoga.exe"
   workflow_call:
 
 jobs:
   names:
+    name: Назви районів = NEPTUN
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
       - uses: actions/checkout@v5
-      - name: Назви районів збігаються з NEPTUN
-        run: python3 test/check_names.py
+      - run: python3 test/check_names.py
+
+  unit:
+    name: Модульні тести + потік (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v5
+      - name: Збірка (стандартний csc .NET Framework 4, як build.bat)
+        run: |
+          python test/build_win.py build/Trevoga.exe
+          python test/build_win.py build/ut.exe --main Trevoga.Tests test/UnitTests.cs
+          python test/build_win.py build/st.exe --main Trevoga.StreamTests test/StreamTests.cs
+      - name: Модульні тести
+        run: build/ut.exe
+      - name: WebSocket-клієнт проти «незручного» сервера
+        shell: bash
+        run: |
+          python test/fake_ws.py 8788 build/ws_res.json &
+          sleep 2
+          build/st.exe ws://127.0.0.1:8788/api/v1/stream 120
+          cat build/ws_res.json
+          python -c "import json,sys; r=json.load(open('build/ws_res.json')); ok=r['pong_ok'] and r['close_reply_ok'] and r['client_masked'] and r['handshake_ok'] and not r['errors'] and r['connections']>=5; print('сервер: OK' if ok else 'сервер: FAIL'); sys.exit(0 if ok else 1)"
+
+  e2e:
+    name: Наскрізний тест Trevoga.exe (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - name: Тестові версії для оновлення (9.9.9.9 / зламана / зависає)
+        run: |
+          python test/build_win.py build/v9999.exe --version 9.9.9.9
+          python test/build_win.py build/vbad.exe --version 9.9.9.10 --mutate bad
+          python test/build_win.py build/vhang.exe --version 9.9.9.11 --mutate hang
+      - name: Зібрати з Trevoga.cs (якщо обрано source)
+        if: ${{ inputs.exe == 'source' }}
+        run: python test/build_win.py Trevoga.exe
+      - name: Сценарій (той самий Trevoga.exe, що лежить у репозиторії)
+        run: python test/e2e.py Trevoga.exe build/e2e build/v9999.exe build/vbad.exe build/vhang.exe
+      - name: Журнал програми
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: e2e-log
+          path: build/e2e-trevoga.log
+
+  live:
+    name: Живі дані NEPTUN і сервера, через проксі (Windows)
+    runs-on: windows-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - name: Збірка
+        run: python test/build_win.py build/live.exe --main Trevoga.LiveTest test/LiveTest.cs
+      - name: Напряму
+        shell: bash
+        run: build/live.exe 40 "$(python -c 'import json;print(json.load(open("config.json"))["server"])')"
+      - name: Через системний проксі (як у закладі з проксі)
+        shell: bash
+        run: |
+          python test/proxy.py 3128 build/proxy.log &
+          sleep 2
+          reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" //v ProxyEnable //t REG_DWORD //d 1 //f
+          reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" //v ProxyServer //t REG_SZ //d 127.0.0.1:3128 //f
+          build/live.exe 40 "$(python -c 'import json;print(json.load(open("config.json"))["server"])')"
+          reg add "HKCU\Software\Microsoft\Windows\CurrentVersion\Internet Settings" //v ProxyEnable //t REG_DWORD //d 0 //f
+          echo "--- проксі бачив:"; sort -u build/proxy.log
+          grep -q "CONNECT neptun.in.ua:443" build/proxy.log || { echo "::error::потік NEPTUN пішов повз проксі"; exit 1; }
+          grep -q "workers.dev:443" build/proxy.log || { echo "::error::запит до сервера пішов повз проксі"; exit 1; }
+
+  soak:
+    name: Довгий тест пам'яті (Windows)
+    if: ${{ github.event_name == 'workflow_dispatch' && inputs.soak_minutes != '0' }}
+    runs-on: windows-latest
+    timeout-minutes: 360
+    steps:
+      - uses: actions/checkout@v5
+      - run: pip install psutil
+      - if: ${{ inputs.exe == 'source' }}
+        run: python test/build_win.py Trevoga.exe
+      - run: python test/soak.py Trevoga.exe build/soak ${{ inputs.soak_minutes }}
+      - if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: soak
+          path: |
+            build/soak.csv
+            build/e2e-trevoga.log

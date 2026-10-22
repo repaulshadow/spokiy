@@ -12,7 +12,12 @@ permissions:
   contents: write   # чтобы записать адрес сервера в config.json
 
 jobs:
+  # Нова версія програм публікується лише якщо пройшли автотести (див. tests.yml)
+  tests:
+    uses: ./.github/workflows/tests.yml
+
   deploy:
+    needs: tests
     runs-on: ubuntu-latest
     timeout-minutes: 15
     defaults:

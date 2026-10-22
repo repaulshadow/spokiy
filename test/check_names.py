@@ -6,9 +6,11 @@ def norm(x):
     t = (x or "").strip().lower().replace("’", "'").replace("ʼ", "'").replace("`", "'")
     if t.startswith("м. "): t = t[3:]
     if t in ("ар крим", "автономна республіка крим"): t = "крим"
-    return t
+    return RENAMED.get(t, t)
 
 src = open("Trevoga.cs", encoding="utf-8-sig").read()
+# та сама таблиця перейменувань, що й у програмі
+RENAMED = dict(re.findall(r'\{ "([^"]+)", "([^"]+)" \}', src.split("RenamedRaions = new")[1].split("};")[0]))
 def arr(name, kind):
     m = re.search(r"public static readonly " + kind + r"\[\] " + name + r" = \{(.*?)\};", src, re.S)
     body = m.group(1)

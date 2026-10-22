@@ -708,8 +708,21 @@ namespace Trevoga
             string t = x.Trim().ToLowerInvariant().Replace('\u2019', '\'').Replace('\u02BC', '\'').Replace('`', '\'');
             if (t.StartsWith("м. ")) t = t.Substring(3);
             if (t == "ар крим" || t == "автономна республіка крим") t = "крим";
+            string alias;
+            if (RenamedRaions.TryGetValue(t, out alias)) t = alias;
             return t;
         }
+
+        // Перейменовані райони: NEPTUN (карта) подекуди вживає старі назви — зводимо до нових
+        static readonly Dictionary<string, string> RenamedRaions = new Dictionary<string, string>
+        {
+            { "володимир-волинський район", "володимирський район" },
+            { "новомосковський район", "самарівський район" },
+            { "новоград-волинський район", "звягельський район" },
+            { "сєвєродонецький район", "сіверськодонецький район" },
+            { "червоноградський район", "шептицький район" },
+            { "красноградський район", "берестинський район" },
+        };
 
         static DateTime? ParseIso(object x)
         {
@@ -946,7 +959,7 @@ namespace Trevoga
         static readonly object lk = new object();
         static Dictionary<string, object> nep;
         static string sig = "";
-        static bool connected;
+        static bool connected, haveData;   // haveData — після (пере)підключення вже прийшов перелік тривог
         static DateTime lastMsg = DateTime.MinValue;
         static Thread thread;
         public static string Status = "";
@@ -956,7 +969,7 @@ namespace Trevoga
         /// <summary>Потік підключений, дані отримано, і сервер NEPTUN подавав ознаки життя протягом 45 с.</summary>
         public static bool Fresh
         {
-            get { lock (lk) return connected && nep != null && (DateTime.UtcNow - lastMsg).TotalSeconds < 45; }
+            get { lock (lk) return connected && haveData && nep != null && (DateTime.UtcNow - lastMsg).TotalSeconds < 35; }
         }
 
         public static Dictionary<string, object> Nep { get { lock (lk) return nep; } }
@@ -1104,8 +1117,8 @@ namespace Trevoga
                     st.Flush();
                     string h = ReadHeaders(st);
                     if (!Regex.IsMatch(h, @"^HTTP/1\.\d 101")) throw new IOException("NEPTUN: " + h.Split('\r')[0]);
-                    ns.ReadTimeout = 50000;      // heartbeat приходить приблизно раз на 15 с
-                    lock (lk) { connected = true; lastMsg = DateTime.UtcNow; }
+                    ns.ReadTimeout = 40000;      // heartbeat приходить приблизно раз на 15 с
+                    lock (lk) { connected = true; haveData = false; lastMsg = DateTime.UtcNow; }
                     SetStatus("підключено");
 
                     byte[] hdr = new byte[8];
@@ -1164,10 +1177,10 @@ namespace Trevoga
             bool changed;
             lock (lk)
             {
-                changed = nep == null || s2 != sig;
+                changed = nep == null || s2 != sig || !haveData;
                 nep = n;
                 sig = s2;
-                connected = true;
+                haveData = true;
             }
             if (changed)
             {
@@ -1703,6 +1716,54 @@ namespace Trevoga
     }
 
     // ---------------- Вікно ----------------
+    // Таймер, що не залежить від видимості вікна: відлік у пуловому потоці, подія — у потоці вікна.
+    // (Звичайний таймер WinForms у прихованому вікні подекуди не спрацьовує.)
+    class UiTimer
+    {
+        readonly Control ui;
+        System.Threading.Timer t;
+        int interval = 1000;
+        volatile bool running;
+        public event EventHandler Tick;
+
+        public UiTimer(Control ui) { this.ui = ui; }
+
+        public int Interval
+        {
+            get { return interval; }
+            set { interval = Math.Max(100, value); if (running && t != null) t.Change(interval, interval); }
+        }
+
+        public void Start()
+        {
+            running = true;
+            if (t == null) t = new System.Threading.Timer(Fire, null, interval, interval);
+            else t.Change(interval, interval);
+        }
+
+        public void Stop()
+        {
+            running = false;
+            if (t != null) t.Change(Timeout.Infinite, Timeout.Infinite);
+        }
+
+        void Fire(object state)
+        {
+            if (!running) return;
+            try
+            {
+                if (ui.IsHandleCreated && !ui.IsDisposed)
+                    ui.BeginInvoke((MethodInvoker)delegate
+                    {
+                        if (!running) return;
+                        EventHandler h = Tick;
+                        if (h != null) h(this, EventArgs.Empty);
+                    });
+            }
+            catch { }
+        }
+    }
+
     class MainForm : Form
     {
         Settings settings;
@@ -1711,12 +1772,15 @@ namespace Trevoga
         CheckBox chkSound, chkAutorun, chkPartial;
         Label lblFooter;
         NotifyIcon tray;
-        System.Windows.Forms.Timer timer, configTimer, updateTimer;
+        UiTimer timer, configTimer, updateTimer;
         bool justUpdated = false, updateReady = false, updateBusy = false;
         string updateVersion = null;
         Icon icoRed, icoGreen, icoGray, icoYellow, icoPurple;
         string level = "";
         AlertState state = AlertState.Unknown;
+        AlertState lastKnown = AlertState.Unknown;      // останній стан, коли дані були
+        List<string> lastKnownThreats = new List<string>();
+        string lastKnownLevel = "";
         List<string> threats = new List<string>();
         DateTime? since;
         DateTime? clearedAt;
@@ -1919,7 +1983,7 @@ namespace Trevoga
             // Запасний варіант для Windows 7: ще раз показати значок через хвилину після запуску
             if (startHidden)
             {
-                System.Windows.Forms.Timer re = new System.Windows.Forms.Timer();
+                UiTimer re = new UiTimer(this);
                 re.Interval = 60000;
                 re.Tick += delegate { re.Stop(); ReAddTray(); };
                 re.Start();
@@ -1932,7 +1996,7 @@ namespace Trevoga
             NeptunStream.Start();
 
             // Нова версія після оновлення працює хвилину — підтверджуємо, резервну копію можна прибрати
-            System.Windows.Forms.Timer confirm = new System.Windows.Forms.Timer();
+            UiTimer confirm = new UiTimer(this);
             confirm.Interval = settings.Test ? 15000 : 60000;
             confirm.Tick += delegate { confirm.Stop(); Updater.Confirm(); };
             confirm.Start();
@@ -1952,19 +2016,19 @@ namespace Trevoga
                 }
                 catch { }
 
-            timer = new System.Windows.Forms.Timer();
+            timer = new UiTimer(this);
             timer.Interval = settings.Interval * 1000;
             timer.Tick += delegate { CheckNow(); };
             timer.Start();
 
             // адресу сервера оновлюємо з GitHub при запуску і раз на 6 годин
-            configTimer = new System.Windows.Forms.Timer();
+            configTimer = new UiTimer(this);
             configTimer.Interval = 6 * 3600 * 1000;
             configTimer.Tick += delegate { if (!settings.Test) RefreshConfig(); };
             configTimer.Start();
 
             // Автооновлення: через 2 хв після запуску і далі раз на 6 годин
-            updateTimer = new System.Windows.Forms.Timer();
+            updateTimer = new UiTimer(this);
             updateTimer.Interval = settings.Test ? 5000 : 2 * 60 * 1000;
             updateTimer.Tick += delegate { updateTimer.Interval = settings.Test ? 10000 : 6 * 3600 * 1000; CheckUpdate(false); };
             updateTimer.Start();
@@ -2052,6 +2116,7 @@ namespace Trevoga
         {
             settings.Save();
             state = AlertState.Unknown;
+            lastKnown = AlertState.Unknown;
             firstCheck = true;
             threats = new List<string>();
             level = "";
@@ -2357,9 +2422,12 @@ namespace Trevoga
             lastSource = r.Source;
             lastTime = DateTime.Now.ToString("HH:mm:ss");
 
-            AlertState old = state;
+            // Порівнюємо з останнім ВІДОМИМ станом: коротка втрата зв'язку посеред тривоги
+            // не повинна ні повторювати сирену, ні «з'їдати» відбій
+            AlertState old = state == AlertState.Unknown ? lastKnown : state;
             List<string> oldThreats = threats;
             string oldLevel = level;
+            if (state == AlertState.Unknown && lastKnown == AlertState.Alert) { oldThreats = lastKnownThreats; oldLevel = lastKnownLevel; }
             state = r.State;
             threats = r.Threats;
             level = r.Level;
@@ -2369,12 +2437,13 @@ namespace Trevoga
                 else if (old != AlertState.Alert) since = firstCheck ? (DateTime?)null : DateTime.Now;
                 clearedAt = null;
             }
-            else
+            else if (state == AlertState.Clear)
             {
                 since = null;
                 if (old == AlertState.Alert) clearedAt = DateTime.Now;
             }
             UpdateCard();
+            if (state != AlertState.Unknown) { lastKnown = state; lastKnownThreats = threats; lastKnownLevel = level; }
             if (state != old || level != oldLevel || string.Join(",", threats.ToArray()) != string.Join(",", oldThreats.ToArray()))
                 Log.W("STATE " + state + " level=" + level + " threats=" + string.Join(",", threats.ToArray())
                     + " src=" + r.Source + (r.Note.Length > 0 ? " note=" + r.Note : ""));
@@ -2390,6 +2459,7 @@ namespace Trevoga
                 justUpdated = false;
                 tray.ShowBalloonTip(5000, "Тривога", "Програму оновлено до версії " + Updater.Current + ".", ToolTipIcon.Info);
             }
+            if (state == AlertState.Unknown) return;     // поки даних немає — нічого не озвучуємо
             if (firstCheck)
             {
                 firstCheck = false;
