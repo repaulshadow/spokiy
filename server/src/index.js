@@ -101,8 +101,17 @@ export class AlertsHub {
     if (m.get("ain")) this.ain = m.get("ain");
     if (m.get("nep")) this.nep = m.get("nep");
     const lg = await this.state.storage.get(["events", "seen"]);
-    this.events = lg.get("events") || [];
     this.seen = lg.get("seen") || {};
+    // Журнал подій — таблиця SQLite (зберігаємо 21 день)
+    const sql = this.state.storage.sql;
+    sql.exec("CREATE TABLE IF NOT EXISTS events (t TEXT, src TEXT, k TEXT, e TEXT)");
+    sql.exec("CREATE INDEX IF NOT EXISTS events_t ON events (t)");
+    const old = lg.get("events");
+    if (old && old.length) {   // перенесення старого журналу-масиву
+      for (const e of old) sql.exec("INSERT INTO events VALUES (?, ?, ?, ?)", e.t, e.src, e.k, e.e);
+      await this.state.storage.delete("events");
+    }
+    this.lastPrune = 0;
     this.loaded = true;
   }
 
@@ -125,9 +134,14 @@ export class AlertsHub {
     }
     const reqUrl = new URL(request.url);
     if (reqUrl.pathname === "/log") {
+      // /log?q=частина назви&since=ISO-час&limit=N
       const q = (reqUrl.searchParams.get("q") || "").toLowerCase();
-      const ev = (this.events || []).filter((e) => !q || e.k.toLowerCase().includes(q));
-      return json({ ok: true, now: new Date(now).toISOString(), events: ev.slice(-300) });
+      const since = reqUrl.searchParams.get("since") || new Date(now - 24 * 3600e3).toISOString();
+      const limit = Math.min(50000, parseInt(reqUrl.searchParams.get("limit") || "5000", 10) || 5000);
+      let ev = this.state.storage.sql.exec("SELECT t, src, k, e FROM events WHERE t >= ? ORDER BY t", since).toArray();
+      if (q) ev = ev.filter((e) => e.k.toLowerCase().includes(q));
+      const first = this.state.storage.sql.exec("SELECT MIN(t) AS t FROM events").toArray()[0];
+      return json({ ok: true, now: new Date(now).toISOString(), oldest: first && first.t, events: ev.slice(-limit) });
     }
     if (reqUrl.pathname === "/health") {
       return json({
@@ -271,7 +285,7 @@ export class AlertsHub {
     await Promise.all(jobs);
     if (d.ain && toSave.ain && !this.ain.err) this.track("alerts.in.ua", this.keysAin());
     if (d.nep && toSave.nep && !this.nep.err) this.track("NEPTUN", this.keysNep());
-    if (this.dirtyLog) { toSave.events = this.events; toSave.seen = this.seen; this.dirtyLog = false; }
+    if (this.dirtyLog) { toSave.seen = this.seen; this.dirtyLog = false; }
     try { await this.state.storage.put(toSave); } catch (e) { /* не критично */ }
   }
 
@@ -304,9 +318,13 @@ export class AlertsHub {
     const now = new Date().toISOString();
     const first = !this.seen[src];
     if (!first) {
-      for (const k of keys) if (!prev.has(k)) this.events.push({ t: now, src, k, e: "тривога" });
-      for (const k of prev) if (!keys.has(k)) this.events.push({ t: now, src, k, e: "відбій" });
-      if (this.events.length > 600) this.events = this.events.slice(-600);
+      const sql = this.state.storage.sql;
+      for (const k of keys) if (!prev.has(k)) sql.exec("INSERT INTO events VALUES (?, ?, ?, ?)", now, src, k, "тривога");
+      for (const k of prev) if (!keys.has(k)) sql.exec("INSERT INTO events VALUES (?, ?, ?, ?)", now, src, k, "відбій");
+      if (Date.now() - this.lastPrune > 3600e3) {
+        this.lastPrune = Date.now();
+        sql.exec("DELETE FROM events WHERE t < ?", new Date(Date.now() - 21 * 86400e3).toISOString());
+      }
     }
     const arr = Array.from(keys);
     if (first || arr.length !== prev.size || arr.some((k) => !prev.has(k))) {
