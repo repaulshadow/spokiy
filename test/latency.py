@@ -18,7 +18,7 @@ events = []
 for name in ON:
     q = name.split()[0][:-3] if name.endswith("область") else name.replace("м. ", "")
     try:
-        d = json.load(urllib.request.urlopen(server + "/log?q=" + urllib.parse.quote(q), timeout=30))
+        d = json.load(urllib.request.urlopen(urllib.request.Request(server + "/log?q=" + urllib.parse.quote(q), headers={"User-Agent": "Trevoga-latency/1.0"}), timeout=30))
         events += d.get("events", [])
     except Exception as e: print("::warning::log " + q + ": " + str(e))
 uniq = {(e["t"], e["src"], e["k"], e["e"]) for e in events}
