@@ -1,0 +1,21 @@
+name: Alert latency
+
+# Наскільки швидко після офіційного часу тривогу/відбій бачать наші джерела. Actions -> Alert latency -> Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      hours:
+        description: "За скільки годин"
+        default: "96"
+
+jobs:
+  latency:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      ALERTS_TOKEN: ${{ secrets.ALERTS_TOKEN }}
+      HOURS: ${{ inputs.hours }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 test/latency.py
