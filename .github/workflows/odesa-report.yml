@@ -1,0 +1,28 @@
+name: Odesa report
+
+# Звіт: тривоги в районі і швидкість спрацювання програми на комп'ютерах. Actions -> Odesa report -> Run workflow.
+on:
+  workflow_dispatch:
+    inputs:
+      since:
+        description: "З якого часу (ISO, київський), напр. 2026-10-26T00:00; порожньо = 7 днів"
+        default: ""
+      raion:
+        default: "Одеський район"
+
+jobs:
+  report:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      ALERTS_TOKEN: ${{ secrets.ALERTS_TOKEN }}
+      SINCE: ${{ inputs.since }}
+      RAION: ${{ inputs.raion }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 test/odesa_report.py
+      - uses: actions/upload-artifact@v4
+        with:
+          name: odesa-report
+          path: odesa_report.md
