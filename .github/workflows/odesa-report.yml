@@ -21,7 +21,7 @@ jobs:
       PYTHONUTF8: "1"
     steps:
       - uses: actions/checkout@v5
-      - run: python3 test/odesa_report.py
+      - run: python3 test/run.py python3 test/odesa_report.py
       - uses: actions/upload-artifact@v4
         with:
           name: odesa-report
