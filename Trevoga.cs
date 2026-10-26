@@ -23,7 +23,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("3.2.0.0")]
+[assembly: System.Reflection.AssemblyVersion("3.3.0.0")]
 
 namespace Trevoga
 {
@@ -238,6 +238,104 @@ namespace Trevoga
         }
     }
 
+    // ---------------- Звіти про спрацювання ----------------
+    // Тривога/відбій/звук із точним часом надсилаються на наш сервер (POST /report), щоб рахувати, за скільки
+    // спрацьовує програма. Лише випадковий id, версія, обране місце і стан — нічого особистого.
+    // Якщо зв'язку немає — чекають у черзі (до 200) і йдуть пізніше.
+    static class Reporter
+    {
+        static readonly object lk = new object();
+        static readonly Queue<string> queue = new Queue<string>();
+        static bool busy;
+        public static string Server = "";
+        public static string Id = "";
+
+        public static string Esc(string x)
+        {
+            if (x == null) return "";
+            StringBuilder sb = new StringBuilder();
+            foreach (char c in x)
+            {
+                if (c == '"' || c == '\\') sb.Append('\\').Append(c);
+                else if (c < ' ') sb.Append("\\u").Append(((int)c).ToString("x4"));
+                else sb.Append(c);
+            }
+            return sb.ToString();
+        }
+
+        /// <summary>Подія: start | state | sound. fields — пари ключ/значення (рядки).</summary>
+        public static void Send(string ev, params string[] fields)
+        {
+            StringBuilder sb = new StringBuilder();
+            sb.Append("{\"e\":\"").Append(Esc(ev)).Append("\",\"t\":\"").Append(DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ"))
+              .Append("\",\"id\":\"").Append(Esc(Id)).Append("\",\"v\":\"").Append(Updater.Current).Append("\"");
+            for (int i = 0; i + 1 < fields.Length; i += 2)
+                sb.Append(",\"").Append(Esc(fields[i])).Append("\":\"").Append(Esc(fields[i + 1])).Append("\"");
+            sb.Append("}");
+            lock (lk)
+            {
+                if (queue.Count >= 200) queue.Dequeue();
+                queue.Enqueue(sb.ToString());
+                if (busy) return;
+                busy = true;
+            }
+            ThreadPool.QueueUserWorkItem(delegate { Pump(); });
+        }
+
+        static void Pump()
+        {
+            int fails = 0;
+            while (true)
+            {
+                string body;
+                lock (lk)
+                {
+                    if (queue.Count == 0 || string.IsNullOrEmpty(Server)) { busy = false; return; }
+                    body = queue.Peek();
+                }
+                try
+                {
+                    // повідомляємо, скільки подія пролежала в черзі (за годинником ПК — він може бути неточним, а різниця точна)
+                    string withQ = body.Substring(0, body.Length - 1) + ",\"sent\":\"" + DateTime.UtcNow.ToString("yyyy-MM-ddTHH:mm:ss.fffZ") + "\"}";
+                    HttpWebRequest req = (HttpWebRequest)WebRequest.Create(Server + "/report");
+                    req.Method = "POST";
+                    req.Timeout = 10000;
+                    req.ReadWriteTimeout = 10000;
+                    req.UserAgent = "Trevoga-Win/" + Updater.Current;
+                    req.ContentType = "application/json";
+                    byte[] b = Encoding.UTF8.GetBytes(withQ);
+                    req.ContentLength = b.Length;
+                    using (Stream rs = req.GetRequestStream()) rs.Write(b, 0, b.Length);
+                    using (HttpWebResponse resp = (HttpWebResponse)req.GetResponse()) { }
+                    lock (lk) { if (queue.Count > 0 && queue.Peek() == body) queue.Dequeue(); }
+                    fails = 0;
+                }
+                catch (WebException ex)
+                {
+                    HttpWebResponse r = ex.Response as HttpWebResponse;
+                    if (r != null && (int)r.StatusCode >= 400 && (int)r.StatusCode < 500)
+                    {   // сервер не приймає звіти (старий сервер, 404) — не накопичуємо
+                        lock (lk) { if (queue.Count > 0 && queue.Peek() == body) queue.Dequeue(); }
+                        continue;
+                    }
+                    if (++fails > 3) { lock (lk) busy = false; return; }   // дошлемо з наступною подією
+                    Thread.Sleep(5000 * fails);
+                }
+                catch
+                {
+                    lock (lk) { if (queue.Count > 0 && queue.Peek() == body) queue.Dequeue(); }
+                }
+            }
+        }
+
+        /// <summary>Періодично: дослати те, що лишилось у черзі.</summary>
+        public static void Flush()
+        {
+            lock (lk) { if (busy || queue.Count == 0) return; busy = true; }
+            ThreadPool.QueueUserWorkItem(delegate { Pump(); });
+        }
+    }
+
     // ---------------- Журнал ----------------
     // trevoga.log поруч із програмою: запуск, стан тривоги, звуки, зв'язок, оновлення, збої. До 1 МБ + trevoga.log.1
     static class Log
@@ -312,6 +410,7 @@ namespace Trevoga
         public string Server = "";         // остання адреса сервера з config.json на GitHub
         public string Stream = "";         // (службове) інша адреса потоку NEPTUN
         public bool Test = false;          // (службове) режим автотестів: швидкі перевірки оновлень
+        public string Id = "";             // випадковий ідентифікатор пристрою для звітів про спрацювання
 
         static string FilePath
         {
@@ -342,11 +441,13 @@ namespace Trevoga
                     else if (k == "server") s.Server = v;
                     else if (k == "stream") s.Stream = v;
                     else if (k == "test") s.Test = v == "1";
+                    else if (k == "id") s.Id = v;
                 }
             }
             catch { }
             if (s.Interval == 20 || s.Interval == 15) s.Interval = 10;   // старі значення за замовчуванням
             if (s.Interval < 10) s.Interval = 10;
+            if (!System.Text.RegularExpressions.Regex.IsMatch(s.Id, "^[0-9a-f]{12}$")) s.Id = Guid.NewGuid().ToString("N").Substring(0, 12);
             return s;
         }
 
@@ -372,6 +473,8 @@ namespace Trevoga
                 sb.AppendLine("server=" + Server);
                 if (Stream.Length > 0) sb.AppendLine("stream=" + Stream);
                 if (Test) sb.AppendLine("test=1");
+                sb.AppendLine("; id       - випадковий номер цієї копії програми (для звітів про швидкість спрацювання)");
+                sb.AppendLine("id=" + Id);
                 File.WriteAllText(FilePath, sb.ToString(), new UTF8Encoding(true));
             }
             catch { }
@@ -1994,6 +2097,9 @@ namespace Trevoga
             if (settings.Test) AlertSource.NeptunBase = server;
             NeptunStream.Changed += OnStreamChanged;
             NeptunStream.Start();
+            Reporter.Server = server;
+            Reporter.Id = settings.Id;
+            Reporter.Send("start", "place", PlaceKey());
 
             // Нова версія після оновлення працює хвилину — підтверджуємо, резервну копію можна прибрати
             UiTimer confirm = new UiTimer(this);
@@ -2018,7 +2124,7 @@ namespace Trevoga
 
             timer = new UiTimer(this);
             timer.Interval = settings.Interval * 1000;
-            timer.Tick += delegate { CheckNow(); };
+            timer.Tick += delegate { CheckNow(); Reporter.Flush(); };
             timer.Start();
 
             // адресу сервера оновлюємо з GitHub при запуску і раз на 6 годин
@@ -2128,6 +2234,12 @@ namespace Trevoga
             CheckNow();
         }
 
+        // Місце для звітів: область|uid району|назва району
+        string PlaceKey()
+        {
+            return settings.Region + "|" + settings.Raion + "|" + (settings.Raion != 0 ? AlertSource.RaionName(settings.Raion) : "");
+        }
+
         string PlaceName()
         {
             string r = settings.Raion != 0 ? AlertSource.RaionName(settings.Raion) : null;
@@ -2196,6 +2308,7 @@ namespace Trevoga
                     {
                         if (s == server) return;
                         server = s;
+                        Reporter.Server = s;
                         settings.Server = s;
                         settings.Save();
                         CheckNow();
@@ -2445,8 +2558,14 @@ namespace Trevoga
             UpdateCard();
             if (state != AlertState.Unknown) { lastKnown = state; lastKnownThreats = threats; lastKnownLevel = level; }
             if (state != old || level != oldLevel || string.Join(",", threats.ToArray()) != string.Join(",", oldThreats.ToArray()))
+            {
                 Log.W("STATE " + state + " level=" + level + " threats=" + string.Join(",", threats.ToArray())
                     + " src=" + r.Source + (r.Note.Length > 0 ? " note=" + r.Note : ""));
+                Reporter.Send("state", "st", state.ToString(), "old", old.ToString(), "lv", level, "th", string.Join(",", threats.ToArray()),
+                    "src", r.Source, "note", r.Note, "place", PlaceKey(),
+                    "since", state == AlertState.Alert && r.Since.HasValue ? r.Since.Value.ToUniversalTime().ToString("yyyy-MM-ddTHH:mm:ssZ") : "",
+                    "first", firstCheck ? "1" : "0");
+            }
             if (updateReady && state != AlertState.Alert) BeginInvoke((MethodInvoker)delegate { TryApplyUpdate(); });
 
             string place = PlaceName();
@@ -2475,32 +2594,32 @@ namespace Trevoga
 
             if (added.Contains("ballistic_missiles"))
             {
-                Log.W("SOUND ballistic"); if (settings.Sound) Sounds.Ballistic(old != AlertState.Alert, threats);
+                Log.W("SOUND ballistic"); Reporter.Send("sound", "kind", "ballistic", "place", PlaceKey()); if (settings.Sound) Sounds.Ballistic(old != AlertState.Alert, threats);
                 tray.ShowBalloonTip(10000, "БАЛІСТИКА!", place + ". Негайно в укриття!", ToolTipIcon.Error);
             }
             else if (old != AlertState.Alert && state == AlertState.Alert)
             {
-                Log.W("SOUND alarm"); if (settings.Sound) Sounds.Alarm(threats);
+                Log.W("SOUND alarm"); Reporter.Send("sound", "kind", "alarm", "place", PlaceKey()); if (settings.Sound) Sounds.Alarm(threats);
                 tray.ShowBalloonTip(10000, level == "yellow" ? "ПОВІТРЯНА ТРИВОГА — жовтий рівень" : "ПОВІТРЯНА ТРИВОГА!",
                     place + ". Пройдіть в укриття!" + (th.Length > 0 ? "\n" + th : ""), ToolTipIcon.Error);
             }
             else if (old == AlertState.Alert && state == AlertState.Alert && oldLevel == "yellow" && level == "red")
             {
                 // Рівень підвищено: жовтий → червоний — повна сирена
-                Log.W("SOUND escalation"); if (settings.Sound) Sounds.Alarm(threats);
+                Log.W("SOUND escalation"); Reporter.Send("sound", "kind", "escalation", "place", PlaceKey()); if (settings.Sound) Sounds.Alarm(threats);
                 tray.ShowBalloonTip(10000, "ЧЕРВОНИЙ РІВЕНЬ ТРИВОГИ!", place + ". Негайно в укриття!"
                     + (th.Length > 0 ? "\n" + th : ""), ToolTipIcon.Error);
             }
             else if (old == AlertState.Alert && state == AlertState.Alert && added.Count > 0)
             {
-                Log.W("SOUND newthreats " + string.Join(",", added.ToArray())); if (settings.Sound) Sounds.NewThreats(added);
+                Log.W("SOUND newthreats " + string.Join(",", added.ToArray())); Reporter.Send("sound", "kind", "newthreats", "place", PlaceKey()); if (settings.Sound) Sounds.NewThreats(added);
                 List<string> at = new List<string>();
                 foreach (string t in added) at.Add(AlertSource.ThreatTitle(t));
                 tray.ShowBalloonTip(8000, "Нова загроза", place + ": " + string.Join(", ", at.ToArray()), ToolTipIcon.Warning);
             }
             else if (old == AlertState.Alert && state == AlertState.Clear)
             {
-                Log.W("SOUND clear"); if (settings.Sound) Sounds.Clear();
+                Log.W("SOUND clear"); Reporter.Send("sound", "kind", "clear", "place", PlaceKey()); if (settings.Sound) Sounds.Clear();
                 tray.ShowBalloonTip(10000, "Відбій тривоги", place, ToolTipIcon.Info);
             }
         }

@@ -34,6 +34,7 @@ class World:
         self.version = None    # (версія, шлях до exe)
         self.gen = 0
         self.requests = {}
+        self.reports = []      # звіти програми (POST /report)
     def changed(self):
         self.gen += 1
 
@@ -71,6 +72,18 @@ class H(BaseHTTPRequestHandler):
     def send(self, code, body, ctype="application/json"):
         self.send_response(code); self.send_header("Content-Type", ctype); self.send_header("Content-Length", str(len(body)))
         self.end_headers(); self.wfile.write(body)
+    def do_POST(self):
+        path = self.path.split("?")[0]
+        n = int(self.headers.get("Content-Length") or 0)
+        body = self.rfile.read(n)
+        if W.server_down: return self.send(503, b"down", "text/plain")
+        if path == "/report":
+            try:
+                W.reports.append(json.loads(body.decode("utf-8")))
+                return self.send(200, b'{"ok":true}')
+            except Exception:
+                return self.send(400, b'{"ok":false}')
+        self.send(404, b"{}")
     def do_GET(self):
         path = self.path.split("?")[0]
         W.requests[path] = W.requests.get(path, 0) + 1
@@ -276,6 +289,19 @@ def main():
     m = mark(); t = change(lambda: W.nep_r.clear())
     expect("Відбій після обриву зв'язку звучить", r"SOUND clear", 75, m)
     time.sleep(3)
+
+    # Звіти про спрацювання дійшли на сервер (у т.ч. ті, що чекали в черзі, поки сервер «лежав»)
+    time.sleep(12)
+    reps = list(W.reports)
+    kinds = [(r.get("e"), r.get("st") or r.get("kind")) for r in reps]
+    step("Звіт: запуск", ("start", None) in kinds, f"звітів {len(reps)}")
+    step("Звіт: тривога з часом початку", any(r.get("e") == "state" and r.get("st") == "Alert" and r.get("since") for r in reps))
+    step("Звіт: відбій", any(r.get("e") == "state" and r.get("st") == "Clear" and r.get("old") == "Alert" for r in reps))
+    step("Звіт: сирена і звук відбою", ("sound", "alarm") in kinds and ("sound", "clear") in kinds)
+    step("Звіт: місце і id", all(r.get("id") and len(r["id"]) == 12 for r in reps) and any(ODR in (r.get("place") or "") for r in reps))
+    step("Звіт: швидкий відбій під час падіння сервера теж дійшов (черга)",
+         sum(1 for r in reps if r.get("e") == "sound" and r.get("kind") == "clear") >= 5,
+         f"звуків відбою у звітах: {sum(1 for r in reps if r.get('e') == 'sound' and r.get('kind') == 'clear')}")
 
     # 10. Друга копія програми не запускається
     if not WIN: return finish()

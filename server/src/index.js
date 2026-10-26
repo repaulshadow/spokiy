@@ -37,6 +37,21 @@ export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
     if (request.method === "OPTIONS") return new Response(null, { headers: CORS });
+
+    // Звіти програм про спрацювання (тривога/відбій/звук із часом) і їх перегляд
+    if (url.pathname === "/report" && request.method === "POST") {
+      const body = await request.text();
+      if (body.length > 4096) return json({ ok: false, error: "too big" }, 413);
+      try { JSON.parse(body); } catch { return json({ ok: false, error: "json" }, 400); }
+      const id = env.ALERTS.idFromName("ua");
+      const r = await env.ALERTS.get(id).fetch("https://do/report", { method: "POST", body });
+      return new Response(r.body, { status: r.status, headers: { "Content-Type": "application/json; charset=utf-8", ...CORS } });
+    }
+    if (url.pathname === "/reports") {
+      const id = env.ALERTS.idFromName("ua");
+      const r = await env.ALERTS.get(id).fetch("https://do/reports" + url.search);
+      return new Response(r.body, { status: r.status, headers: { "Content-Type": "application/json; charset=utf-8", ...CORS } });
+    }
     if (request.method !== "GET") return json({ ok: false, error: "method" }, 405);
 
     if (url.pathname === "/log") {
@@ -106,6 +121,8 @@ export class AlertsHub {
     const sql = this.state.storage.sql;
     sql.exec("CREATE TABLE IF NOT EXISTS events (t TEXT, src TEXT, k TEXT, e TEXT)");
     sql.exec("CREATE INDEX IF NOT EXISTS events_t ON events (t)");
+    sql.exec("CREATE TABLE IF NOT EXISTS reports (t TEXT, id TEXT, body TEXT)");
+    sql.exec("CREATE INDEX IF NOT EXISTS reports_t ON reports (t)");
     const old = lg.get("events");
     if (old && old.length) {   // перенесення старого журналу-масиву
       for (const e of old) sql.exec("INSERT INTO events VALUES (?, ?, ?, ?)", e.t, e.src, e.k, e.e);
@@ -125,6 +142,26 @@ export class AlertsHub {
 
   async fetch(request) {
     await this.load();
+    const path = new URL(request.url).pathname;
+    if (path === "/report") {
+      const sql = this.state.storage.sql;
+      const body = await request.text();
+      let devId = "";
+      try { devId = String(JSON.parse(body).id || "").slice(0, 32); } catch {}
+      const today = new Date().toISOString().slice(0, 10);
+      const n = sql.exec("SELECT COUNT(*) AS n FROM reports WHERE id = ? AND t >= ?", devId, today).toArray()[0].n;
+      if (n > 3000) return json({ ok: false, error: "limit" }, 429);   // захист від зациклення
+      sql.exec("INSERT INTO reports VALUES (?, ?, ?)", new Date().toISOString(), devId, body);
+      if (Math.random() < 0.01) sql.exec("DELETE FROM reports WHERE t < ?", new Date(Date.now() - 120 * 86400e3).toISOString());
+      return json({ ok: true });
+    }
+    if (path === "/reports") {
+      const p = new URL(request.url).searchParams;
+      const since = p.get("since") || new Date(Date.now() - 7 * 86400e3).toISOString();
+      let rows = this.state.storage.sql.exec("SELECT t, id, body FROM reports WHERE t >= ? ORDER BY t", since).toArray();
+      if (p.get("id")) rows = rows.filter((r) => r.id === p.get("id"));
+      return json({ ok: true, now: new Date().toISOString(), reports: rows.slice(-20000).map((r) => ({ srv: r.t, ...JSON.parse(r.body) })) });
+    }
     let now = Date.now();
     const d0 = this.due(now);
     if (d0.ain || d0.nep) {
