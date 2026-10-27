@@ -6,7 +6,7 @@ on:
 
 jobs:
   usage:
-    runs-on: ubuntu-latest
+    runs-on: [self-hosted, trevoga]   # Mac користувача (хмарні хвилини GitHub не витрачаються)
     timeout-minutes: 5
     env:
       CLOUDFLARE_API_TOKEN: ${{ secrets.CLOUDFLARE_API_TOKEN }}
