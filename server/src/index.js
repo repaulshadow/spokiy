@@ -28,6 +28,20 @@ const UA_GAP_MS = 62000;       // не частіше одного запиту 
 const UA_STALE_MS = 300000;    // без звірки й webhook 5 хв — дані UkraineAlarm недійсні
 const HB_MS = 15000;           // heartbeat у потоці /stream
 
+// Причина тривоги (текст, напр. «Дронова загроза (жовтий рівень)») -> типи загроз як у alerts.in.ua
+function reasonTypes(txt) {
+  txt = String(txt || "").toLowerCase();
+  const t = [];
+  if (/баліст/.test(txt)) t.push("ballistic_missiles");
+  if (/крилат/.test(txt)) t.push("cruise_missiles");
+  if (/ракет/.test(txt) && !t.length) t.push("unspecified_missiles");
+  if (/міг|mig/.test(txt)) t.push("mig31k_departure");
+  if (/каб|авіабомб|керован/.test(txt)) t.push("guided_aerial_bombs");
+  if (/дрон|бпла|шахед|безпілот/.test(txt)) t.push("drones");
+  if (/артобстріл|артилер/.test(txt)) t.push("artillery_shelling");
+  return t;
+}
+
 // Секретна частина адреси webhook: перші 24 символи sha256 від ключа (знають лише сервер і workflow реєстрації)
 async function hookSecret(key) {
   const h = await crypto.subtle.digest("SHA-256", new TextEncoder().encode("trevoga-hook:" + key));
@@ -446,12 +460,14 @@ export class AlertsHub {
   uaRegion(r) {
     const alerts = (r.activeAlerts || []).map((x) => {
       let lv = null, since = x.lastUpdate || r.lastUpdate || null;
+      const reasons = [];
       for (const l of x.activeAlertLevels || []) {
         const v = String(l.alertLevel || "").toLowerCase();
         if (v === "red" || (v === "yellow" && lv !== "red")) lv = v;
         if (l.createdAt && (!since || l.createdAt < since)) since = l.createdAt;
+        if (l.reason) reasons.push(l.reason);
       }
-      return { type: x.type || "AIR", level: lv, since };
+      return { type: x.type || "AIR", level: lv, since, why: reasons };
     });
     if (!alerts.length) return null;
     return { a: alerts, n: r.regionName || null, t: r.regionType || null };
@@ -466,9 +482,34 @@ export class AlertsHub {
     const items = Array.isArray(j) ? j : [j];
     for (const r of items) {
       if (!r || r.regionId === undefined) continue;
-      const v = this.uaRegion(r);
-      if (v) this.ua.regions[String(r.regionId)] = v;
-      else delete this.ua.regions[String(r.regionId)];
+      const id = String(r.regionId);
+      if (r.status !== undefined) {
+        // Подія: {status: Activate|DEACTIVATE, regionId, alarmType, createdAt, alertLevel, reason,
+        //          activeAlertLevels: рівні, що ЛИШИЛИСЬ активними після події}
+        const type = r.alarmType || "AIR";
+        const cur = this.ua.regions[id] || { a: [] };
+        const prev = cur.a.find((x) => x.type === type);
+        const left = r.activeAlertLevels || [];
+        const others = cur.a.filter((x) => x.type !== type);
+        if (left.length) {
+          let lv = null, since = prev && prev.since ? prev.since : null;
+          const why = [];
+          for (const l of left) {
+            const v = String(l.alertLevel || "").toLowerCase();
+            if (v === "red" || (v === "yellow" && lv !== "red")) lv = v;
+            if (!prev && l.createdAt && (!since || l.createdAt < since)) since = l.createdAt;
+            if (l.reason) why.push(l.reason);
+          }
+          others.push({ type, level: lv, since: since || r.createdAt || null, why });
+        }
+        if (others.length) this.ua.regions[id] = { a: others, n: cur.n || null, t: cur.t || null };
+        else delete this.ua.regions[id];
+      } else {
+        // Знімок регіону (формат /alerts)
+        const v = this.uaRegion(r);
+        if (v) this.ua.regions[id] = v;
+        else delete this.ua.regions[id];
+      }
     }
     this.ua.hookAt = now;
     this.ua.hooks = (this.ua.hooks || 0) + 1;
@@ -481,7 +522,12 @@ export class AlertsHub {
     const out = { r: [], o: [], c: [] };
     const types = (a) => {
       const map = { ARTILLERY: "artillery_shelling", URBAN_FIGHTS: "urban_fights", CHEMICAL: "chemical", NUCLEAR: "nuclear" };
-      return a.map((x) => map[x.type]).filter(Boolean);
+      const t = [];
+      for (const x of a) {
+        if (map[x.type] && !t.includes(map[x.type])) t.push(map[x.type]);
+        for (const y of reasonTypes((x.why || []).join(" "))) if (!t.includes(y)) t.push(y);
+      }
+      return t;
     };
     for (const [id, v] of Object.entries(this.ua.regions || {})) {
       const d = (this.uaDir && this.uaDir[id]) || { n: v.n, t: v.t };
@@ -501,7 +547,9 @@ export class AlertsHub {
   // Повідомлення потоку /stream у форматі NEPTUN («alerts»), щоб програма розбирала його тим самим кодом
   uaStreamMessage() {
     const p = this.uaFresh(Date.now()) ? this.uaPayload() : null;
-    const reason = (ts) => ts.map((t) => ({ artillery_shelling: "Артобстріл", urban_fights: "Вуличні бої", chemical: "Хімічна загроза", nuclear: "Радіаційна загроза" }[t] || ""));
+    const reason = (ts) => ts.map((t) => ({ artillery_shelling: "Артобстріл", urban_fights: "Вуличні бої", chemical: "Хімічна загроза",
+      nuclear: "Радіаційна загроза", ballistic_missiles: "Балістика", cruise_missiles: "Крилаті ракети", unspecified_missiles: "Ракетна загроза",
+      mig31k_departure: "МіГ-31К", guided_aerial_bombs: "КАБ", drones: "Дрони" }[t] || ""));
     return JSON.stringify({
       type: p ? "alerts" : "heartbeat", source: "ukrainealarm", ts: new Date().toISOString(),
       data: p ? {

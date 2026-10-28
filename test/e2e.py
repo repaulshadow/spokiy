@@ -9,7 +9,7 @@ from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 WIN = os.name == "nt"
 EXE, WORK = os.path.abspath(sys.argv[1]), os.path.abspath(sys.argv[2])
 V9999, VBAD, VHANG = (sys.argv[3:6] + [None, None, None])[:3]
-HTTP_PORT, WS_PORT = 8787, 8788
+HTTP_PORT, WS_PORT, UA_PORT = 8787, 8788, 8789
 ROOT_DIR = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 
 # ---------- назви/коди з Trevoga.cs ----------
@@ -31,6 +31,9 @@ class World:
         self.nep_o = {}        # область -> (рівень, причини)
         self.server_down = False
         self.ws_down = False
+        self.ua_r = {}         # UkraineAlarm (офіційне): назва району -> (область, рівень)
+        self.ua_o = {}         # область -> рівень
+        self.ua_ws_down = False
         self.version = None    # (версія, шлях до exe)
         self.gen = 0
         self.requests = {}
@@ -42,11 +45,26 @@ W = World()
 NOW = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(minutes=1)).strftime("%Y-%m-%dT%H:%M:%SZ")   # тривоги «почалися» хвилину тому
 TYPES = {"Дрон": "drones", "Баліст": "ballistic_missiles", "Ракет": "unspecified_missiles"}
 
+FIRST = {}   # коли запис з'явився в «світі» — це його час початку (як у справжніх джерелах)
+def since_of(k):
+    if k not in FIRST: FIRST[k] = (dt.datetime.now(dt.timezone.utc) - dt.timedelta(seconds=1)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    return FIRST[k]
+def prune_first():
+    alive = {("n", x) for x in W.nep_r} | {("no", x) for x in W.nep_o} | {("u", x) for x in W.ua_r} | {("uo", x) for x in W.ua_o}
+    for k in list(FIRST):
+        if k not in alive: del FIRST[k]
+
 def neptun_rest():
     with W.lock:
         return {"version": W.gen, "updatedAt": NOW,
-                "raions": [{"key": n.lower(), "name": n, "oblast": o, "since": NOW, "level": l, "reasons": r} for n, (o, l, r) in W.nep_r.items()],
-                "oblasts": [{"key": o.lower(), "name": o, "oblast": o, "since": NOW, "level": l, "reasons": r} for o, (l, r) in W.nep_o.items()]}
+                "raions": [{"key": n.lower(), "name": n, "oblast": o, "since": since_of(("n", n)), "level": l, "reasons": r} for n, (o, l, r) in W.nep_r.items()],
+                "oblasts": [{"key": o.lower(), "name": o, "oblast": o, "since": since_of(("no", o)), "level": l, "reasons": r} for o, (l, r) in W.nep_o.items()]}
+
+def ua_rest():
+    with W.lock:
+        return {"raions": [{"key": n.lower(), "name": n, "oblast": o, "since": since_of(("u", n)), "level": l, "reasons": []} for n, (o, l) in W.ua_r.items()],
+                "oblasts": [{"key": o.lower(), "name": o, "oblast": o, "since": since_of(("uo", o)), "level": l, "reasons": []} for o, l in W.ua_o.items()],
+                "communities": []}
 
 def types_of(reasons):
     t = []
@@ -63,9 +81,10 @@ def status():
             a = {"u": uid, "o": uid, "on": OD, "s": since, "l": lvl, "t": thr}
             if rname: a["r"] = rname
             alerts.append(a)
-        nep = {"r": [[o, n, NOW, l, types_of(r)] for n, (o, l, r) in W.nep_r.items()],
-               "o": [[o, NOW, l, types_of(r)] for o, (l, r) in W.nep_o.items()]}
-        return {"ok": True, "poll": 5, "updated": NOW, "air": "".join(air), "alerts": alerts, "neptun": nep}
+        nep = {"r": [[o, n, since_of(("n", n)), l, types_of(r)] for n, (o, l, r) in W.nep_r.items()],
+               "o": [[o, since_of(("no", o)), l, types_of(r)] for o, (l, r) in W.nep_o.items()]}
+        ua = {"r": [[o, n, since_of(("u", n)), l, []] for n, (o, l) in W.ua_r.items()], "o": [[o, since_of(("uo", o)), l, []] for o, l in W.ua_o.items()], "c": []}
+        return {"ok": True, "poll": 5, "updated": NOW, "air": "".join(air), "alerts": alerts, "neptun": nep, "ua": ua}
 
 class H(BaseHTTPRequestHandler):
     def log_message(self, *a): pass
@@ -107,7 +126,9 @@ def frame(op, payload):
     h = struct.pack("!BB", 0x80 | op, n) if n < 126 else struct.pack("!BBH", 0x80 | op, 126, n) if n < 65536 else struct.pack("!BBQ", 0x80 | op, 127, n)
     return h + payload
 ws_conns = []
-def ws_client(c):
+def ws_client(c, data_fn=None, is_down=None):
+    data_fn = data_fn or neptun_rest
+    is_down = is_down or (lambda: W.ws_down)
     try:
         req = b""
         while b"\r\n\r\n" not in req:
@@ -119,10 +140,10 @@ def ws_client(c):
         c.sendall(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + acc + "\r\n\r\n").encode())
         sent_gen, last_hb = -1, 0
         c.settimeout(0.05)
-        while not W.ws_down:
+        while not is_down():
             if W.gen != sent_gen:
                 sent_gen = W.gen
-                c.sendall(frame(1, json.dumps({"type": "alerts", "ts": NOW, "data": neptun_rest()}, ensure_ascii=False).encode()))
+                c.sendall(frame(1, json.dumps({"type": "alerts", "ts": NOW, "data": data_fn()}, ensure_ascii=False).encode()))
             if time.time() - last_hb > 5:
                 last_hb = time.time(); c.sendall(frame(1, b'{"type":"heartbeat","ts":"x"}'))
             try:
@@ -141,6 +162,16 @@ def ws_server():
         c, _ = s.accept()
         if W.ws_down: c.close(); continue
         threading.Thread(target=ws_client, args=(c,), daemon=True).start()
+
+# потік нашого сервера (UkraineAlarm); «лежить», коли лежить сервер
+def ua_down(): return W.ua_ws_down or W.server_down
+def ua_ws_server():
+    s = socket.socket(); s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+    s.bind(("127.0.0.1", UA_PORT)); s.listen(16)
+    while True:
+        c, _ = s.accept()
+        if ua_down(): c.close(); continue
+        threading.Thread(target=ws_client, args=(c, ua_rest, ua_down), daemon=True).start()
 
 # ---------- програма ----------
 LOG = os.path.join(WORK, "trevoga.log")
@@ -207,6 +238,7 @@ def expect_none(name, pattern, seconds, after):
 def change(fn):
     with W.lock:
         fn()
+        prune_first()
         W.changed()
     return time.time()
 
@@ -217,9 +249,10 @@ def main():
     shutil.copy(EXE, APP)
     with open(os.path.join(WORK, "trevoga.ini"), "w", encoding="utf-8-sig") as f:
         f.write(f"region={OD}\nraion={ODR_UID}\nsound=1\nvoice=tetiana\nserver=http://127.0.0.1:{HTTP_PORT}\n"
-                f"stream=ws://127.0.0.1:{WS_PORT}/api/v1/stream\ntest=1\n")
+                f"stream=ws://127.0.0.1:{WS_PORT}/api/v1/stream\nuastream=ws://127.0.0.1:{UA_PORT}/stream\ntest=1\n")
     threading.Thread(target=ThreadingHTTPServer(("127.0.0.1", HTTP_PORT), H).serve_forever, daemon=True).start()
     threading.Thread(target=ws_server, daemon=True).start()
+    threading.Thread(target=ua_ws_server, daemon=True).start()
 
     m = mark(); start_app("/min")
     expect("Запуск", r"START v", 30, m)
@@ -278,15 +311,38 @@ def main():
     m = mark(); t = change(lambda: W.nep_r.clear())
     expect("Сервер лежить — відбій з потоку", r"SOUND clear", 10, m, t, max_latency=1.5)
     W.server_down = False
+    m_server_back = mark()
+
+    # U. Офіційне джерело UkraineAlarm (потік нашого сервера; після «падіння» сервера він перепідключається сам)
+    expect("Потік UkraineAlarm підключено", r"UASTREAM підключено", 75, m_server_back)
+    m = mark(); t = change(lambda: W.ua_r.__setitem__(ODR, (OD, "red")))
+    expect("Тривога з UkraineAlarm — швидкість", r"STATE Alert.*UkraineAlarm наживо", 10, m, t, max_latency=1.5)
+    expect("Сирена за UkraineAlarm", r"SOUND alarm", 3, m)
+    change(lambda: (W.nep_r.__setitem__(ODR, (OD, "red", ["Ракетна загроза"])), W.ain.__setitem__(ODR_UID, (ODR, "red", ["unspecified_missiles"], NOW))))
+    time.sleep(7)
+    m = mark(); t = change(lambda: W.ua_r.pop(ODR))
+    expect("Офіційний відбій UkraineAlarm — одразу, не чекаючи NEPTUN", r"STATE Clear.*відбій за UkraineAlarm", 10, m, t, max_latency=1.5)
+    expect("Звук відбою за UkraineAlarm", r"SOUND clear", 3, m)
+    expect_none("NEPTUN і alerts.in.ua із запізненням не вмикають тривогу знову", r"STATE Alert|SOUND alarm", 25, m)
+    change(lambda: (W.nep_r.clear(), W.ain.clear()))
+    time.sleep(6)
+    m = mark(); W.ua_ws_down = True
+    expect("Втрату потоку UkraineAlarm помічено", r"UASTREAM (?!підключено)", 45, m)
+    m = mark(); t = change(lambda: W.ua_r.__setitem__(ODR, (OD, "yellow")))
+    expect("Без потоку UkraineAlarm — тривога через сервер", r"STATE Alert", 15, m, t, max_latency=8)
+    m = mark(); t = change(lambda: W.ua_r.clear())
+    expect("Без потоку UkraineAlarm — відбій через сервер", r"SOUND clear", 15, m, t, max_latency=8)
+    m = mark(); W.ua_ws_down = False
+    expect("Потік UkraineAlarm відновився сам", r"UASTREAM підключено", 75, m)
 
     # 9. Зв'язку немає зовсім посеред тривоги: без повторної сирени і без «з'їденого» відбою
-    m = mark(); change(lambda: W.nep_r.__setitem__(ODR, (OD, "red", ["Ракетна загроза"])))
+    m = mark(); change(lambda: (W.nep_r.__setitem__(ODR, (OD, "red", ["Ракетна загроза"])), W.ua_r.__setitem__(ODR, (OD, "red"))))
     expect("Тривога перед обривом зв'язку", r"SOUND alarm", 10, m)
     m = mark(); W.server_down = True; W.ws_down = True
     expect("Обрив зв'язку помічено", r"STATE Unknown|ERROR", 60, m)
     W.server_down = False; W.ws_down = False
     expect_none("Після відновлення — без повторної сирени", r"SOUND alarm", 20, m)
-    m = mark(); t = change(lambda: W.nep_r.clear())
+    m = mark(); t = change(lambda: (W.nep_r.clear(), W.ua_r.clear()))
     expect("Відбій після обриву зв'язку звучить", r"SOUND clear", 75, m)
     time.sleep(3)
 

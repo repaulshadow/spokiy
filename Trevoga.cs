@@ -23,7 +23,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("3.4.0.0")]
+[assembly: System.Reflection.AssemblyVersion("3.5.0.0")]
 
 namespace Trevoga
 {
@@ -419,6 +419,7 @@ namespace Trevoga
         public string Voice = "tetiana";   // tetiana, mykyta, off
         public string Server = "";         // остання адреса сервера з config.json на GitHub
         public string Stream = "";         // (службове) інша адреса потоку NEPTUN
+        public string UaStream = "";       // (службове) інша адреса потоку нашого сервера
         public bool Test = false;          // (службове) режим автотестів: швидкі перевірки оновлень
         public string Id = "";             // випадковий ідентифікатор пристрою для звітів про спрацювання
 
@@ -450,6 +451,7 @@ namespace Trevoga
                     else if (k == "voice" && (v == "tetiana" || v == "mykyta" || v == "off")) s.Voice = v;
                     else if (k == "server") s.Server = v;
                     else if (k == "stream") s.Stream = v;
+                    else if (k == "uastream") s.UaStream = v;
                     else if (k == "test") s.Test = v == "1";
                     else if (k == "id") s.Id = v;
                 }
@@ -482,6 +484,7 @@ namespace Trevoga
                 sb.AppendLine("voice=" + Voice);
                 sb.AppendLine("server=" + Server);
                 if (Stream.Length > 0) sb.AppendLine("stream=" + Stream);
+                if (UaStream.Length > 0) sb.AppendLine("uastream=" + UaStream);
                 if (Test) sb.AppendLine("test=1");
                 sb.AppendLine("; id       - випадковий номер цієї копії програми (для звітів про швидкість спрацювання)");
                 sb.AppendLine("id=" + Id);
@@ -629,6 +632,7 @@ namespace Trevoga
         public string Level = "";        // рівень тривоги: "red" | "yellow" | "" (невідомо)
         public AlertState AinState = AlertState.Unknown;   // що показує alerts.in.ua
         public AlertState NepState = AlertState.Unknown;   // що показує NEPTUN
+        public AlertState UaState = AlertState.Unknown;    // що показує UkraineAlarm (офіційне джерело)
     }
 
     static class AlertSource
@@ -811,6 +815,22 @@ namespace Trevoga
             Dictionary<string, object> nep = new Dictionary<string, object>();
             nep["r"] = r;
             nep["o"] = o;
+            // громади (лише в потоці нашого сервера): [область, район, громада, початок, рівень, типи]
+            List<object> cs = j.TryGetValue("communities", out v) ? v as List<object> : null;
+            if (cs != null)
+            {
+                List<object> c = new List<object>();
+                foreach (object item in cs)
+                {
+                    Dictionary<string, object> x = item as Dictionary<string, object>;
+                    if (x == null) continue;
+                    object a, b, n, d, e;
+                    x.TryGetValue("oblast", out a); x.TryGetValue("raion", out b); x.TryGetValue("name", out n);
+                    x.TryGetValue("since", out d); x.TryGetValue("level", out e);
+                    c.Add(new List<object>(new object[] { a, b, n, d, Lower(e), new List<object>() }));
+                }
+                nep["c"] = c;
+            }
             return nep;
         }
 
@@ -884,20 +904,87 @@ namespace Trevoga
         // (alerts.in.ua сервер оновлює раз на 20 с), щоб відбій прозвучав одразу.
         public static CheckResult FromRoot(Settings s, Dictionary<string, object> root, DateTime? ignoreAinBefore)
         {
+            return FromRoot(s, root, ignoreAinBefore, null);
+        }
+
+        class SrcEval
+        {
+            public AlertState State = AlertState.Clear;
+            public string Level = "";
+            public List<string> Threats = new List<string>();
+            public DateTime? Since;
+        }
+
+        // Джерело у форматі NEPTUN: o — області, r — райони, c — громади (часткова тривога)
+        static SrcEval EvalNepLike(Settings s, Dictionary<string, object> nep, string oblN, string raionN, int obl)
+        {
+            SrcEval res = new SrcEval();
+            CheckResult tmp = new CheckResult();
+            object v;
+            bool oblWide = false, raionHit = false, partialHit = false;
+            int alertedInObl = 0;
+            if (nep.TryGetValue("o", out v) && v is List<object>)
+                foreach (object item in (List<object>)v)
+                {
+                    List<object> e = item as List<object>;
+                    if (e == null || e.Count < 1 || Norm(Convert.ToString(e[0])) != oblN) continue;
+                    oblWide = true;
+                    if (e.Count > 1) Earliest(tmp, ParseIso(e[1]));
+                    if (e.Count > 2 && e[2] != null) res.Level = MaxLevel(res.Level, Convert.ToString(e[2]));
+                    if (e.Count > 3) AddTypes(res.Threats, e[3]);
+                }
+            if (nep.TryGetValue("r", out v) && v is List<object>)
+                foreach (object item in (List<object>)v)
+                {
+                    List<object> e = item as List<object>;
+                    if (e == null || e.Count < 2 || Norm(Convert.ToString(e[0])) != oblN) continue;
+                    alertedInObl++;
+                    bool mine = s.Raion != 0 && Norm(Convert.ToString(e[1])) == raionN;
+                    if (mine) raionHit = true;
+                    string lv = e.Count > 3 && e[3] != null ? Convert.ToString(e[3]) : "";
+                    if (mine || s.Raion == 0)
+                    {
+                        if (e.Count > 2) Earliest(tmp, ParseIso(e[2]));
+                        res.Level = MaxLevel(res.Level, lv);
+                        if (e.Count > 4) AddTypes(res.Threats, e[4]);
+                    }
+                }
+            if (s.Partial && nep.TryGetValue("c", out v) && v is List<object>)
+                foreach (object item in (List<object>)v)
+                {
+                    List<object> e = item as List<object>;
+                    if (e == null || e.Count < 3 || Norm(Convert.ToString(e[0])) != oblN) continue;
+                    if (s.Raion != 0 && Norm(Convert.ToString(e[1])) != raionN) continue;
+                    partialHit = true;
+                    if (e.Count > 3) Earliest(tmp, ParseIso(e[3]));
+                    if (e.Count > 4 && e[4] != null) res.Level = MaxLevel(res.Level, Convert.ToString(e[4]));
+                }
+            int raionsInObl = 0;
+            for (int i = 0; i < Locations.RaionOblast.Length; i++) if (Locations.RaionOblast[i] == obl) raionsInObl++;
+            bool allRaions = raionsInObl > 0 && alertedInObl >= raionsInObl;
+            if (s.Raion != 0) res.State = (oblWide || raionHit || partialHit) ? AlertState.Alert : AlertState.Clear;
+            else res.State = (oblWide || allRaions || (s.Partial && (alertedInObl > 0 || partialHit))) ? AlertState.Alert : AlertState.Clear;
+            res.Since = tmp.Since;
+            return res;
+        }
+
+        // ignoreNepBefore: UkraineAlarm щойно дав відбій — тривоги NEPTUN, що почалися раніше, вважаємо застарілими
+        public static CheckResult FromRoot(Settings s, Dictionary<string, object> root, DateTime? ignoreAinBefore, DateTime? ignoreNepBefore)
+        {
             int obl = OblastUid(s.Region);
             if (obl < 0) throw new Exception("невідома область");
             object v;
             string air = root.TryGetValue("air", out v) ? v as string : null;
             Dictionary<string, object> nep = root.TryGetValue("neptun", out v) ? v as Dictionary<string, object> : null;
-            if (air == null && nep == null) throw new Exception("сервер без даних");
+            if (air == null && nep == null && !(root.ContainsKey("ua") && root["ua"] is Dictionary<string, object>)) throw new Exception("сервер без даних");
 
             string raionName = s.Raion != 0 ? RaionName(s.Raion) : null;
             string oblN = Norm(s.Region), raionN = Norm(raionName);
             CheckResult r = new CheckResult();
             AlertState ain = AlertState.Unknown, nepState = AlertState.Unknown;
-            CheckResult ainRes = new CheckResult(), nepRes = new CheckResult();
-            string ainLevel = "", nepLevel = "";
-            List<string> ainThreats = new List<string>(), nepThreats = new List<string>();
+            CheckResult ainRes = new CheckResult();
+            string ainLevel = "";
+            List<string> ainThreats = new List<string>();
             bool ainPartial = false;      // alerts.in.ua: тривога лише в частині району/області
 
             // --- Джерело 1: alerts.in.ua
@@ -943,81 +1030,62 @@ namespace Trevoga
                 ainIgnored = true;
             }
 
-            // --- Джерело 2: NEPTUN (офіційні тривоги UkraineAlarm по районах, з рівнем)
-            if (nep != null)
+            // --- Джерело 2: NEPTUN; джерело 3: UkraineAlarm (офіційне, через наш сервер) — однаковий формат
+            SrcEval nepE = nep != null ? EvalNepLike(s, nep, oblN, raionN, obl) : null;
+            object uav;
+            Dictionary<string, object> uaD = root.TryGetValue("ua", out uav) ? uav as Dictionary<string, object> : null;
+            SrcEval uaE = uaD != null ? EvalNepLike(s, uaD, oblN, raionN, obl) : null;
+            AlertState uaState = uaE != null ? uaE.State : AlertState.Unknown;
+            if (nepE != null) nepState = nepE.State;
+            // UkraineAlarm щойно дав відбій — тривоги NEPTUN, що почалися раніше, вважаємо застарілими (NEPTUN запізнюється)
+            bool nepIgnored = false;
+            if (nepE != null && nepE.State == AlertState.Alert && ignoreNepBefore.HasValue
+                && (!nepE.Since.HasValue || nepE.Since.Value <= ignoreNepBefore.Value))
             {
-                bool oblWide = false, raionHit = false;
-                int alertedInObl = 0;
-                string anyLevel = "";
-                List<string> anyTypes = new List<string>();
-                if (nep.TryGetValue("o", out v) && v is List<object>)
-                    foreach (object item in (List<object>)v)
-                    {
-                        List<object> e = item as List<object>;
-                        if (e == null || e.Count < 1 || Norm(Convert.ToString(e[0])) != oblN) continue;
-                        oblWide = true;
-                        if (e.Count > 1) Earliest(nepRes, ParseIso(e[1]));
-                        if (e.Count > 2 && e[2] != null) nepLevel = MaxLevel(nepLevel, Convert.ToString(e[2]));
-                        if (e.Count > 3) AddTypes(nepThreats, e[3]);
-                    }
-                if (nep.TryGetValue("r", out v) && v is List<object>)
-                    foreach (object item in (List<object>)v)
-                    {
-                        List<object> e = item as List<object>;
-                        if (e == null || e.Count < 2 || Norm(Convert.ToString(e[0])) != oblN) continue;
-                        alertedInObl++;
-                        bool mine = s.Raion != 0 && Norm(Convert.ToString(e[1])) == raionN;
-                        if (mine) raionHit = true;
-                        string lv = e.Count > 3 && e[3] != null ? Convert.ToString(e[3]) : "";
-                        anyLevel = MaxLevel(anyLevel, lv);
-                        if (e.Count > 4) AddTypes(anyTypes, e[4]);
-                        if (mine || s.Raion == 0)
-                        {
-                            if (e.Count > 2) Earliest(nepRes, ParseIso(e[2]));
-                            nepLevel = MaxLevel(nepLevel, lv);
-                            if (e.Count > 4) AddTypes(nepThreats, e[4]);
-                        }
-                    }
-                int raionsInObl = 0;
-                for (int i = 0; i < Locations.RaionOblast.Length; i++) if (Locations.RaionOblast[i] == obl) raionsInObl++;
-                bool allRaions = raionsInObl > 0 && alertedInObl >= raionsInObl;
-                if (s.Raion != 0) nepState = (oblWide || raionHit) ? AlertState.Alert : AlertState.Clear;
-                else nepState = (oblWide || allRaions || (s.Partial && alertedInObl > 0)) ? AlertState.Alert : AlertState.Clear;
+                nepState = AlertState.Clear;
+                nepIgnored = true;
             }
 
-            if (ain == AlertState.Unknown && nepState == AlertState.Unknown) throw new Exception("неочікувана відповідь сервера");
+            if (ain == AlertState.Unknown && nepState == AlertState.Unknown && uaState == AlertState.Unknown) throw new Exception("неочікувана відповідь сервера");
 
             // --- Зведення: тривога, якщо її показує хоча б одне джерело
-            r.State = (ain == AlertState.Alert || nepState == AlertState.Alert) ? AlertState.Alert : AlertState.Clear;
+            r.State = (ain == AlertState.Alert || nepState == AlertState.Alert || uaState == AlertState.Alert) ? AlertState.Alert : AlertState.Clear;
             if (r.State == AlertState.Alert)
             {
                 // Рівень — найвищий серед джерел, що бачать тривогу; якщо невідомий — червоний
                 string lv = "";
                 if (ain == AlertState.Alert || ainPartial) lv = MaxLevel(lv, ainLevel);
-                if (nepState == AlertState.Alert) lv = MaxLevel(lv, nepLevel);
+                if (nepState == AlertState.Alert) lv = MaxLevel(lv, nepE.Level);
+                if (uaState == AlertState.Alert) lv = MaxLevel(lv, uaE.Level);
                 r.Level = lv.Length > 0 ? lv : "red";
                 foreach (string t in ainThreats) if (!r.Threats.Contains(t)) r.Threats.Add(t);
-                if (nepState == AlertState.Alert) foreach (string t in nepThreats) if (!r.Threats.Contains(t)) r.Threats.Add(t);
+                if (nepState == AlertState.Alert) foreach (string t in nepE.Threats) if (!r.Threats.Contains(t)) r.Threats.Add(t);
+                if (uaState == AlertState.Alert) foreach (string t in uaE.Threats) if (!r.Threats.Contains(t)) r.Threats.Add(t);
                 if (ain == AlertState.Alert || ainPartial) Earliest(r, ainRes.Since);
-                if (nepState == AlertState.Alert) Earliest(r, nepRes.Since);
+                if (nepState == AlertState.Alert) Earliest(r, nepE.Since);
+                if (uaState == AlertState.Alert) Earliest(r, uaE.Since);
             }
 
             List<string> names = new List<string>();
-            if (ain != AlertState.Unknown) names.Add("alerts.in.ua");
-            if (nepState != AlertState.Unknown) names.Add("NEPTUN");
+            List<string> alerting = new List<string>();
+            int known = 0, alerts = 0;
+            if (ain != AlertState.Unknown) { names.Add("alerts.in.ua"); known++; if (ain == AlertState.Alert) { alerts++; alerting.Add("alerts.in.ua"); } }
+            if (nepState != AlertState.Unknown) { names.Add("NEPTUN"); known++; if (nepState == AlertState.Alert) { alerts++; alerting.Add("NEPTUN"); } }
+            if (uaState != AlertState.Unknown) { names.Add("UkraineAlarm"); known++; if (uaState == AlertState.Alert) { alerts++; alerting.Add("UkraineAlarm"); } }
             r.Source = string.Join(" + ", names.ToArray());
             r.AinState = ain;
-            r.NepState = nepState;
-            if (ainIgnored && r.State == AlertState.Clear)
-                r.Note = "відбій за NEPTUN (alerts.in.ua ще оновлюється)";
-            else if (ain != AlertState.Unknown && nepState != AlertState.Unknown)
+            r.NepState = nepE != null ? nepE.State : AlertState.Unknown;
+            r.UaState = uaState;
+            if ((ainIgnored || nepIgnored) && r.State == AlertState.Clear)
+                r.Note = nepIgnored ? "відбій за UkraineAlarm (інші джерела ще оновлюються)" : "відбій за NEPTUN (alerts.in.ua ще оновлюється)";
+            else if (known >= 2)
             {
-                if (ain == nepState) r.Note = "джерела збігаються";
-                else if (ainPartial && nepState == AlertState.Alert)
-                    r.Note = "alerts.in.ua: тривога в частині " + (s.Raion != 0 ? "району" : "області") + ", NEPTUN: у всьому";
+                if (alerts == 0 || alerts == known) r.Note = "джерела збігаються";
+                else if (ainPartial && alerts == known - 1 && ain != AlertState.Alert)
+                    r.Note = "alerts.in.ua: тривога в частині " + (s.Raion != 0 ? "району" : "області") + ", інші: у всьому";
                 else
                 {
-                    r.Note = "джерела розходяться: " + (ain == AlertState.Alert ? "тривогу показує лише alerts.in.ua" : "тривогу показує лише NEPTUN");
+                    r.Note = "джерела розходяться: тривогу показує " + (alerting.Count == 1 ? "лише " : "") + string.Join(" і ", alerting.ToArray());
                     r.Disagree = true;
                 }
             }
@@ -1066,37 +1134,39 @@ namespace Trevoga
     // ---------------- Потік NEPTUN (WebSocket) ----------------
     // NEPTUN надсилає зміну тривог одразу, без опитування. У .NET 4 на Windows 7 немає ClientWebSocket,
     // тому — мінімальний WebSocket-клієнт на TcpClient + SslStream (з підтримкою системного проксі).
-    static class NeptunStream
+    class StreamClient
     {
-        public static string Url = "wss://neptun.in.ua/api/v1/stream";
-        static readonly object lk = new object();
-        static Dictionary<string, object> nep;
-        static string sig = "";
-        static bool connected, haveData;   // haveData — після (пере)підключення вже прийшов перелік тривог
-        static DateTime lastMsg = DateTime.MinValue;
-        static Thread thread;
-        public static string Status = "";
+        public string Url;
+        readonly string logName;
+        public StreamClient(string logName, string url) { this.logName = logName; Url = url; }
+        readonly object lk = new object();
+        Dictionary<string, object> nep;
+        string sig = "";
+        bool connected, haveData;   // haveData — після (пере)підключення вже прийшов перелік тривог
+        DateTime lastMsg = DateTime.MinValue;
+        Thread thread;
+        public string Status = "";
         /// <summary>Викликається з фонового потоку, коли змінився перелік тривог.</summary>
-        public static event Action Changed;
+        public event Action Changed;
 
         /// <summary>Потік підключений, дані отримано, і сервер NEPTUN подавав ознаки життя протягом 45 с.</summary>
-        public static bool Fresh
+        public bool Fresh
         {
             get { lock (lk) return connected && haveData && nep != null && (DateTime.UtcNow - lastMsg).TotalSeconds < 35; }
         }
 
-        public static Dictionary<string, object> Nep { get { lock (lk) return nep; } }
+        public Dictionary<string, object> Nep { get { lock (lk) return nep; } }
 
-        public static void Start()
+        public void Start()
         {
             if (thread != null) return;
             thread = new Thread(Loop);
             thread.IsBackground = true;
-            thread.Name = "neptun-stream";
+            thread.Name = logName;
             thread.Start();
         }
 
-        static void Loop()
+        void Loop()
         {
             int fails = 0;
             while (true)
@@ -1111,9 +1181,9 @@ namespace Trevoga
             }
         }
 
-        static void SetStatus(string st)
+        void SetStatus(string st)
         {
-            if (st != Status) Log.W("STREAM " + st);
+            if (st != Status) Log.W(logName + " " + st);
             Status = st;
         }
 
@@ -1177,7 +1247,7 @@ namespace Trevoga
             catch { return null; }
         }
 
-        static void RunOnce()
+        void RunOnce()
         {
             Uri u = new Uri(Url.Replace("wss://", "https://").Replace("ws://", "http://"));
             string host = u.Host;
@@ -1274,7 +1344,7 @@ namespace Trevoga
             }
         }
 
-        static void Handle(string text)
+        void Handle(string text)
         {
             // Потік надсилає й треки дронів (великі повідомлення) — розбираємо лише «alerts»
             string head = text.Length > 200 ? text.Substring(0, 200) : text;
@@ -1305,8 +1375,9 @@ namespace Trevoga
         static string Signature(Dictionary<string, object> n)
         {
             StringBuilder sb = new StringBuilder();
-            foreach (string key in new string[] { "r", "o" })
+            foreach (string key in new string[] { "r", "o", "c" })
             {
+                if (!n.ContainsKey(key)) continue;
                 sb.Append(key).Append(':');
                 foreach (object e in (List<object>)n[key])
                 {
@@ -1322,6 +1393,30 @@ namespace Trevoga
             }
             return sb.ToString();
         }
+    }
+
+
+    // Потік NEPTUN і потік нашого сервера (офіційні дані UkraineAlarm у тому ж форматі)
+    static class NeptunStream
+    {
+        public static readonly StreamClient C = new StreamClient("STREAM", "wss://neptun.in.ua/api/v1/stream");
+        public static string Url { get { return C.Url; } set { C.Url = value; } }
+        public static bool Fresh { get { return C.Fresh; } }
+        public static Dictionary<string, object> Nep { get { return C.Nep; } }
+        public static string Status { get { return C.Status; } }
+        public static event Action Changed { add { C.Changed += value; } remove { C.Changed -= value; } }
+        public static void Start() { C.Start(); }
+    }
+
+    static class UaStream
+    {
+        public static readonly StreamClient C = new StreamClient("UASTREAM", "");
+        public static string Url { get { return C.Url; } set { C.Url = value; } }
+        public static bool Fresh { get { return C.Url.Length > 0 && C.Fresh; } }
+        public static Dictionary<string, object> Nep { get { return C.Nep; } }
+        public static string Status { get { return C.Status; } }
+        public static event Action Changed { add { C.Changed += value; } remove { C.Changed -= value; } }
+        public static void Start() { if (C.Url.Length > 0) C.Start(); }
     }
 
     // ---------------- Звуки ----------------
@@ -2110,6 +2205,10 @@ namespace Trevoga
             if (settings.Test) AlertSource.NeptunBase = server;
             NeptunStream.Changed += OnStreamChanged;
             NeptunStream.Start();
+            // Потік нашого сервера: офіційні тривоги UkraineAlarm (webhook) — найшвидше джерело
+            UaStream.Url = settings.UaStream.Length > 0 ? settings.UaStream : StreamUrlOf(server);
+            UaStream.Changed += OnStreamChanged;
+            UaStream.Start();
             Reporter.Server = server;
             Reporter.Id = settings.Id;
             Reporter.Send("start", "place", PlaceKey());
@@ -2118,7 +2217,7 @@ namespace Trevoga
             alive.Interval = settings.Test ? 10000 : 30 * 60 * 1000;
             alive.Tick += delegate
             {
-                Reporter.Send("alive", "place", PlaceKey(), "stream", NeptunStream.Fresh ? "1" : "0",
+                Reporter.Send("alive", "place", PlaceKey(), "stream", NeptunStream.Fresh ? "1" : "0", "uastream", UaStream.Fresh ? "1" : "0",
                     "st", state.ToString(), "srv_ok", lastServerError == null ? "1" : "0");
             };
             alive.Start();
@@ -2268,6 +2367,12 @@ namespace Trevoga
             CheckNow();
         }
 
+        static string StreamUrlOf(string srv)
+        {
+            if (string.IsNullOrEmpty(srv)) return "";
+            return srv.TrimEnd('/').Replace("https://", "wss://").Replace("http://", "ws://") + "/stream";
+        }
+
         // Місце для звітів: область|uid району|назва району
         string PlaceKey()
         {
@@ -2343,6 +2448,7 @@ namespace Trevoga
                         if (s == server) return;
                         server = s;
                         Reporter.Server = s;
+                        if (settings.UaStream.Length == 0) UaStream.Url = StreamUrlOf(s);
                         settings.Server = s;
                         settings.Save();
                         CheckNow();
@@ -2404,6 +2510,9 @@ namespace Trevoga
         string nepKey = "";
         AlertState prevNep = AlertState.Unknown;
         DateTime? nepClearedAt;
+        DateTime nepSeenAt = DateTime.MinValue, uaSeenAt = DateTime.MinValue;   // час найсвіжіших даних кожного джерела
+        AlertState prevUa = AlertState.Unknown;      // UkraineAlarm: попередній стан і час офіційного відбою
+        DateTime? uaClearedAt;
 
         void CheckNow()
         {
@@ -2424,7 +2533,7 @@ namespace Trevoga
                     catch (Exception ex) { serverError = AlertSource.Short(ex.Message); }
                 }
                 // Без сервера і без потоку NEPTUN — запасні джерела
-                if (root == null && !NeptunStream.Fresh)
+                if (root == null && !NeptunStream.Fresh && !UaStream.Fresh)
                 {
                     try { fallback = AlertSource.Fallback(snapshot, serverError); }
                     catch (Exception ex) { error = ex.Message; }
@@ -2437,7 +2546,7 @@ namespace Trevoga
                         if (myId != requestId) return;
                         if (root != null) { lastRoot = root; lastRootAt = DateTime.UtcNow; lastServerError = null; }
                         else lastServerError = serverError ?? "сервер ще не налаштовано";
-                        if (root == null && !NeptunStream.Fresh) ApplyResult(fallback, error);
+                        if (root == null && !NeptunStream.Fresh && !UaStream.Fresh) ApplyResult(fallback, error);
                         else Recompute();
                     });
                 }
@@ -2448,40 +2557,71 @@ namespace Trevoga
         /// <summary>Зведення без мережі: останні дані сервера + свіжий потік NEPTUN. Викликається на кожну зміну в потоці.</summary>
         void Recompute()
         {
-            bool live = NeptunStream.Fresh;
+            bool live = NeptunStream.Fresh, uaLive = UaStream.Fresh;
             Dictionary<string, object> nep = live ? NeptunStream.Nep : null;
+            Dictionary<string, object> ua = uaLive ? UaStream.Nep : null;
             Dictionary<string, object> root = new Dictionary<string, object>();
             bool rootFresh = lastRoot != null && (DateTime.UtcNow - lastRootAt).TotalSeconds < 90;
             if (rootFresh) foreach (KeyValuePair<string, object> kv in lastRoot) root[kv.Key] = kv.Value;
-            if (nep != null) root["neptun"] = nep;
-            if (!root.ContainsKey("air") && !root.ContainsKey("neptun")) return;   // даних немає — дочекаємося опитування
+            // Не змішуємо свіже зі старим: якщо потік уже показав новіші дані, ніж остання відповідь сервера,
+            // а тепер потоку немає — старі дані сервера про це джерело не беремо, доки не прийде новіша відповідь
+            DateTime nowU = DateTime.UtcNow;
+            if (nep != null) { root["neptun"] = nep; nepSeenAt = nowU; }
+            else if (root.ContainsKey("neptun"))
+            {
+                if (lastRootAt < nepSeenAt) root.Remove("neptun"); else nepSeenAt = lastRootAt;
+            }
+            if (ua != null) { root["ua"] = ua; uaSeenAt = nowU; }
+            else if (root.ContainsKey("ua") && root["ua"] is Dictionary<string, object>)
+            {
+                if (lastRootAt < uaSeenAt) root.Remove("ua"); else uaSeenAt = lastRootAt;
+            }
+            bool uaKnown = root.ContainsKey("ua") && root["ua"] is Dictionary<string, object>;
+            if (!root.ContainsKey("air") && !root.ContainsKey("neptun") && !uaKnown) return;   // даних немає — дочекаємося опитування
 
             string key = settings.Region + "|" + settings.Raion + "|" + settings.Partial;
-            if (key != nepKey) { nepKey = key; prevNep = AlertState.Unknown; nepClearedAt = null; }
+            if (key != nepKey) { nepKey = key; prevNep = AlertState.Unknown; nepClearedAt = null; prevUa = AlertState.Unknown; uaClearedAt = null; }
             if (nepClearedAt.HasValue && (DateTime.Now - nepClearedAt.Value).TotalSeconds > 90) nepClearedAt = null;
+            if (uaClearedAt.HasValue && (DateTime.Now - uaClearedAt.Value).TotalSeconds > 180) uaClearedAt = null;
 
             CheckResult r;
             try
             {
-                r = AlertSource.FromRoot(settings, root, live ? nepClearedAt : null);
+                r = Merge(root, live);
+                bool again = false;
+                // Офіційний відбій UkraineAlarm — не чекаємо NEPTUN (запізнюється до ~2 хв) і alerts.in.ua
+                if (uaKnown)
+                {
+                    if (prevUa == AlertState.Alert && r.UaState == AlertState.Clear) { uaClearedAt = DateTime.Now; again = true; }
+                    else if (r.UaState == AlertState.Alert) uaClearedAt = null;
+                    prevUa = r.UaState;
+                }
+                // NEPTUN дав відбій — не чекаємо alerts.in.ua
                 if (live)
                 {
-                    // NEPTUN (офіційна тривога) щойно дав відбій — не чекаємо, поки оновиться alerts.in.ua
-                    if (prevNep == AlertState.Alert && r.NepState == AlertState.Clear)
-                    {
-                        nepClearedAt = DateTime.Now;
-                        r = AlertSource.FromRoot(settings, root, nepClearedAt);
-                    }
+                    if (prevNep == AlertState.Alert && r.NepState == AlertState.Clear) { nepClearedAt = DateTime.Now; again = true; }
                     else if (r.NepState == AlertState.Alert) nepClearedAt = null;
                     prevNep = r.NepState;
                 }
+                if (again) r = Merge(root, live);
             }
             catch (Exception ex) { ApplyResult(null, ex.Message); return; }
             r.PollS = rootFresh ? AlertSource.PollOf(lastRoot) : 0;
             if (live) r.Source = r.Source.Replace("NEPTUN", "NEPTUN наживо");
+            if (uaLive) r.Source = r.Source.Replace("UkraineAlarm", "UkraineAlarm наживо");
             if (lastServerError != null)
                 r.Note = "сервер недоступний (" + lastServerError + ")" + (r.Note.Length > 0 ? " · " + r.Note : "");
             ApplyResult(r, null);
+        }
+
+        CheckResult Merge(Dictionary<string, object> root, bool live)
+        {
+            DateTime? ignAin = live ? nepClearedAt : null;
+            if (uaClearedAt.HasValue && (!ignAin.HasValue || uaClearedAt.Value > ignAin.Value)) ignAin = uaClearedAt;
+            // NEPTUN запізнюється й на початку тривоги (до ~1 хв): його «нова» тривога в перші 90 с після офіційного
+            // відбою — це зазвичай стара. Справді нову тривогу першим покаже сам UkraineAlarm.
+            DateTime? ignNep = uaClearedAt.HasValue ? (DateTime?)uaClearedAt.Value.AddSeconds(90) : null;
+            return AlertSource.FromRoot(settings, root, ignAin, ignNep);
         }
 
         void OnStreamChanged()

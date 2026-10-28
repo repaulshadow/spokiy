@@ -70,16 +70,16 @@ def stats(xs):
 
 res = {}
 for o in official:
-    for s in ("NEPTUN", "alerts.in.ua"):
+    for s in ("UkraineAlarm", "NEPTUN", "alerts.in.ua"):
         d = match(o, s)
         if d is not None:
             res.setdefault((s, o["e"], "all"), []).append(d)
             if "одеськ" in norm(o["obl"]): res.setdefault((s, o["e"], "odesa"), []).append(d)
             if norm(o["title"]) == "одеський район": res.setdefault((s, o["e"], "odr"), []).append((o["t"], d))
-for s in ("NEPTUN", "alerts.in.ua"):
+for s in ("UkraineAlarm", "NEPTUN", "alerts.in.ua"):
     for e in ("тривога", "відбій"):
         print(f"::notice title={s} · {e} · уся Україна::{stats(res.get((s, e, 'all'), []))}")
         print(f"::notice title={s} · {e} · Одеська обл.::{stats(res.get((s, e, 'odesa'), []))}")
-for s in ("NEPTUN", "alerts.in.ua"):
+for s in ("UkraineAlarm", "NEPTUN", "alerts.in.ua"):
     rows = sorted(res.get((s, "тривога", "odr"), []) + [(t, d) for t, d in res.get((s, "відбій", "odr"), [])])
     print(f"::notice title={s} · Одеський район (кожна подія)::" + "; ".join(f"{t.astimezone(kyiv):%d.%m %H:%M:%S} +{d:.0f}с" for t, d in rows[-40:]))

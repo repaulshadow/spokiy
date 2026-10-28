@@ -39,6 +39,25 @@ namespace Trevoga
             public List<object> R = new List<object>();
             public List<object> O = new List<object>();
             public bool WithAir = true, WithNep = true;
+            public List<object> UR = null, UO = null, UC = null;   // UkraineAlarm (null — джерела немає)
+            public Root Ua(string obl, string raion, string level, string since)
+            {
+                if (UR == null) { UR = new List<object>(); UO = new List<object>(); UC = new List<object>(); }
+                if (raion != null) UR.Add(new List<object>(new object[] { obl, raion, since, level, new List<object>() }));
+                return this;
+            }
+            public Root UaOblast(string obl, string level, string since)
+            {
+                Ua(obl, null, null, null);
+                UO.Add(new List<object>(new object[] { obl, since, level, new List<object>() }));
+                return this;
+            }
+            public Root UaCommunity(string obl, string raion, string name, string level, string since)
+            {
+                Ua(obl, null, null, null);
+                UC.Add(new List<object>(new object[] { obl, raion, name, since, level, new List<object>() }));
+                return this;
+            }
 
             public Root AinRaion(int uid, string oblName, string raionName, string level, string since, params string[] threats)
             {
@@ -78,6 +97,12 @@ namespace Trevoga
                     n["r"] = R; n["o"] = O;
                     root["neptun"] = n;
                 }
+                if (UR != null)
+                {
+                    Dictionary<string, object> u = new Dictionary<string, object>();
+                    u["r"] = UR; u["o"] = UO; u["c"] = UC;
+                    root["ua"] = u;
+                }
                 return root;
             }
         }
@@ -112,6 +137,7 @@ namespace Trevoga
             TestLocations();
             TestMerge();
             TestFastClear();
+            TestUkraineAlarm();
             TestSettingsAndLog();
             Console.WriteLine("Пройдено: " + passed + ", помилок: " + failed + " (" + sw.ElapsedMilliseconds + " мс)");
             Environment.Exit(failed == 0 ? 0 : 1);
@@ -340,6 +366,64 @@ namespace Trevoga
             Root same = new Root().Nep(OD, ODR, "yellow", T0, "drones");
             Eq(M(od, same).Level, M(od, same).Level, "детермінованість");
         }
+
+        static void TestUkraineAlarm()
+        {
+            Settings od = S(OD, ODR, false);
+            int odUid = RaionUid(ODR);
+            const string T0 = "2026-10-28T10:00:00Z";
+            CheckResult r = M(od, new Root().Ua(OD, null, null, null));
+            Eq(AlertState.Clear, r.State, "UA: тиша");
+            Eq(AlertState.Clear, r.UaState, "UA: UaState тиша");
+            Check(r.Source.Contains("UkraineAlarm"), "UA: джерело в переліку");
+
+            r = M(od, new Root().Ua(OD, ODR, "yellow", T0));
+            Eq(AlertState.Alert, r.State, "UA: тривога лише з UkraineAlarm");
+            Eq("yellow", r.Level, "UA: жовтий рівень");
+            Eq(AlertState.Alert, r.UaState, "UA: UaState");
+            Check(r.Disagree && r.Note.Contains("UkraineAlarm"), "UA: розбіжність названо");
+
+            r = M(od, new Root().UaOblast(OD, "red", T0));
+            Eq(AlertState.Alert, r.State, "UA: тривога по області");
+            r = M(od, new Root().Ua(OD, IzmName, "red", T0));
+            Eq(AlertState.Clear, r.State, "UA: сусідній район — тиша");
+
+            r = M(od, new Root().UaCommunity(OD, ODR, "Чорноморська громада", "red", T0));
+            Eq(AlertState.Clear, r.State, "UA: громада без галочки — тиша");
+            r = M(S(OD, ODR, true), new Root().UaCommunity(OD, ODR, "Чорноморська громада", "red", T0));
+            Eq(AlertState.Alert, r.State, "UA: громада з галочкою — тривога");
+
+            // усі три джерела показують тривогу → збіг
+            r = M(od, new Root().AinRaion(odUid, OD, ODR, "red", T0).Nep(OD, ODR, "red", T0).Ua(OD, ODR, "red", T0));
+            Eq("джерела збігаються", r.Note, "UA: три джерела збігаються");
+
+            // Офіційний відбій: UA тиша, NEPTUN і alerts.in.ua ще показують тривогу, що почалась раніше
+            Root late = new Root().AinRaion(odUid, OD, ODR, "red", T0).Nep(OD, ODR, "red", T0).Ua(OD, null, null, null);
+            r = AlertSource.FromRoot(od, late.Build(), null, null);
+            Eq(AlertState.Alert, r.State, "UA відбій: без вікна — ще тривога (інші джерела)");
+            DateTime clear = new DateTime(2026, 10, 28, 12, 30, 0, DateTimeKind.Local);
+            r = AlertSource.FromRoot(od, late.Build(), clear, clear);
+            Eq(AlertState.Clear, r.State, "UA відбій: одразу");
+            Check(r.Note.Contains("UkraineAlarm"), "UA відбій: примітка");
+            // нова тривога NEPTUN після офіційного відбою — тривога
+            Root fresh = new Root().Nep(OD, ODR, "red", "2026-10-28T11:00:00Z").Ua(OD, null, null, null);
+            r = AlertSource.FromRoot(od, fresh.Build(), new DateTime(2026, 10, 28, 12, 0, 0, DateTimeKind.Utc).ToLocalTime().AddMinutes(-90), new DateTime(2026, 10, 28, 12, 0, 0, DateTimeKind.Utc).ToLocalTime().AddMinutes(-90));
+            Eq(AlertState.Alert, r.State, "UA відбій: нова тривога NEPTUN після нього — тривога");
+            // UA знову тривога — тривога, хоч би що
+            r = AlertSource.FromRoot(od, new Root().Ua(OD, ODR, "red", T0).Build(), clear, clear);
+            Eq(AlertState.Alert, r.State, "UA: тривога сильніша за вікно відбою");
+
+            // формат потоку нашого сервера (як NEPTUN + громади)
+            Dictionary<string, object> j = (Dictionary<string, object>)Json.Parse("{\"raions\":[{\"name\":\"Одеський район\",\"oblast\":\"Одеська область\",\"since\":\"" + T0 + "\",\"level\":\"red\",\"reasons\":[\"Артобстріл\"]}],\"oblasts\":[],\"communities\":[{\"oblast\":\"Одеська область\",\"raion\":\"Одеський район\",\"name\":\"Х\",\"since\":\"" + T0 + "\",\"level\":\"yellow\"}]}");
+            Dictionary<string, object> n = AlertSource.NeptunToNep(j);
+            Eq(1, ((List<object>)n["c"]).Count, "потік сервера: громади");
+            Dictionary<string, object> root = new Dictionary<string, object>(); root["ua"] = n;
+            r = AlertSource.FromRoot(od, root, null);
+            Eq(AlertState.Alert, r.State, "потік сервера: тривога району");
+            Check(r.Threats.Contains("artillery_shelling"), "потік сервера: тип загрози");
+        }
+
+        const string IzmName = "Ізмаїльський район";
 
         static void TestFastClear()
         {
