@@ -85,7 +85,17 @@ for dev, rs in devices.items():
         dc = (min(m2) - a["fin"]).total_seconds() if m2 else None
         if da is not None: d_alarm.append(da)
         if dc is not None: d_clear.append(dc)
-        rows.append(f"| {k(a['st'])} | {'' if da is None else f'+{da:.1f} с'} | {'' if dc is None else f'+{dc:.1f} с'} |")
+        # чи працював ПК: останній звіт перед тривогою не «stop» і не старший за 35 хв (з 3.4 «живий» щопівгодини)
+        before = [(T(r["srv"]), r) for r in rs if T(r["srv"]) <= a["st"]]
+        on = "?"
+        if before:
+            lt, lr = max(before, key=lambda x: x[0])
+            on = "так" if lr.get("e") != "stop" and (a["st"] - lt).total_seconds() < 35 * 60 else "ні"
+        if da is None and dc is None:
+            note = "ПК вимкнений" if on == "ні" else ("⚠ ПК працював, реакції немає" if on == "так" else "ПК, найімовірніше, вимкнений")
+            rows.append(f"| {k(a['st'])} | {note} | |")
+        else:
+            rows.append(f"| {k(a['st'])} | {'' if da is None else f'+{da:.1f} с'} | {'' if dc is None else f'+{dc:.1f} с'} |")
     print("::notice title=сирі звіти " + dev + "::" + " ¦ ".join(
         f"{k(T(r['srv']))} {r.get('e')} {r.get('st') or r.get('kind') or ''} {('було ' + r['old']) if r.get('old') else ''} {r.get('src') or ''} {r.get('note') or ''} first={r.get('first','')}"
         for r in rs[-40:])[:3800])
