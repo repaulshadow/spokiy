@@ -13,8 +13,18 @@ import e2e as _e2e
 
 def step(name, ok, detail="", latency=None):
     _e2e.step(name, ok, detail, latency)
-    lat = f" ({latency:.2f} с)" if latency is not None else ""
-    print(f"::{'notice' if ok else 'error'} title={'PASS' if ok else 'FAIL'} {name}{lat}::{detail[:300]}", flush=True)
+
+def summary():
+    rows = [("✔ " if ok else "✘ ") + n + (f" ({lat:.2f} с)" if lat is not None else "") + ("" if ok else " — " + d[:160]) for n, ok, d, lat in _e2e.results]
+    for i in range(0, len(rows), 12):
+        print("::notice title=результати " + str(i // 12 + 1) + "::" + " ¦ ".join(rows[i:i + 12]), flush=True)
+    crash = adb("logcat", "-d", "-b", "crash")
+    if crash.strip():
+        print("::error title=журнал аварій Android::" + crash.replace("\n", " ¦ ")[:3500], flush=True)
+    tail = adb("logcat", "-d", "-v", "time", "-s", "Trevoga:I", "AndroidRuntime:E", "MediaPlayer:E", "AudioTrack:E")
+    print("::notice title=останні рядки журналу::" + " ¦ ".join(tail.strip().splitlines()[-30:])[:3500], flush=True)
+    pid = adb("shell", "pidof", PKG).strip()
+    print("::notice title=процес::" + (pid or "немає"), flush=True)
 from http.server import ThreadingHTTPServer
 
 PKG = "ua.spokiy.trevoga"
@@ -115,6 +125,8 @@ if __name__ == "__main__":
     if hasattr(signal, "SIGALRM"):
         def _timeout(*_):
             step("Сценарій уклався в 20 хв", False, "зупинено за таймаутом")
+            try: summary()
+            except Exception: pass
             for p in LOGCAT:
                 try: p.kill()
                 except Exception: pass
@@ -126,6 +138,8 @@ if __name__ == "__main__":
     for p in LOGCAT:
         try: p.kill()
         except Exception: pass
+    try: summary()
+    except Exception as ex: print("::warning::summary " + repr(ex))
     ok = all(r[1] for r in e2e.results)
     print(f"\nПройдено {sum(1 for r in e2e.results if r[1])} з {len(e2e.results)}")
     sys.exit(0 if ok else 1)
