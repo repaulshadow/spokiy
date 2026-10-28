@@ -101,7 +101,7 @@ jobs:
     timeout-minutes: 45
     steps:
       - uses: actions/checkout@v5
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v5
         with: { distribution: temurin, java-version: "17" }
       - name: org.json (справжня бібліотека; в android.jar — заглушки)
         run: curl -sSL -o org-json.jar https://repo1.maven.org/maven2/org/json/json/20240303/json-20240303.jar
@@ -121,7 +121,7 @@ jobs:
           arch: x86_64
           disable-animations: true
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
-          script: python3 test/run.py python3 android/test/android_e2e.py build/test.apk
+          script: python3 android/test/android_e2e.py build/test.apk
 
   soak:
     name: Довгий тест пам'яті (Windows)

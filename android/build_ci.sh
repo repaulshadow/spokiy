@@ -7,7 +7,7 @@ cd "$(dirname "$0")"
 OUT=${1:-build/test.apk}
 SDKROOT=${ANDROID_HOME:-$ANDROID_SDK_ROOT}
 BT=$(ls -d "$SDKROOT"/build-tools/* | sort -V | tail -1)
-PLAT=$(ls -d "$SDKROOT"/platforms/android-* | sort -V | tail -1)/android.jar
+PLAT=$(ls -d "$SDKROOT"/platforms/android-* | grep -v -e beta -e ext | sort -V | tail -1)/android.jar
 echo "build-tools: $BT; platform: $PLAT"
 rm -rf build/ci && mkdir -p build/ci/gen build/ci/classes build/ci/dex res/raw
 if [ -n "$SERVER_URL" ]; then printf '{"server": "%s"}\n' "$SERVER_URL" > res/raw/config.json; else cp ../config.json res/raw/config.json; fi

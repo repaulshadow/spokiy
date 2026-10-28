@@ -8,7 +8,13 @@ sys.argv = [sys.argv[0], "-", os.path.join(HERE, "..", "build", "e2e-unused")] +
 APK = os.path.abspath(sys.argv[2 + 1]) if len(sys.argv) > 3 else None
 sys.path.insert(0, os.path.join(HERE, "..", "..", "test"))
 import e2e
-from e2e import W, change, step, report
+from e2e import W, change, report
+import e2e as _e2e
+
+def step(name, ok, detail="", latency=None):
+    _e2e.step(name, ok, detail, latency)
+    lat = f" ({latency:.2f} с)" if latency is not None else ""
+    print(f"::{'notice' if ok else 'error'} title={'PASS' if ok else 'FAIL'} {name}{lat}::{detail[:300]}", flush=True)
 from http.server import ThreadingHTTPServer
 
 PKG = "ua.spokiy.trevoga"
@@ -19,13 +25,17 @@ def adb(*a, check=False):
     return subprocess.run(["adb"] + list(a), capture_output=True, text=True, check=check).stdout
 
 LOG = []
+LOGCAT = []
 def logcat_reader():
-    p = subprocess.Popen(["adb", "logcat", "-v", "epoch", "-s", "Trevoga:I", "AndroidRuntime:E"], stdout=subprocess.PIPE, text=True, encoding="utf-8", errors="replace")
+    # stderr/stdin — окремо, щоб процес logcat не тримав вивід скрипта (інакше обгортка чекає вічно)
+    p = subprocess.Popen(["adb", "logcat", "-v", "epoch", "-s", "Trevoga:I", "AndroidRuntime:E"], stdout=subprocess.PIPE,
+                         stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
+    LOGCAT.append(p)
     for line in p.stdout:
         line = line.rstrip()
         m = re.match(r"\s*(\d+\.\d+)\s+\d+\s+\d+\s+\w\s+(\S+)\s*:\s*(.*)", line)
         if m: LOG.append((float(m.group(1)), m.group(2), m.group(3)))
-        print("logcat:", line, flush=True)
+        if "Trevoga" in line or "FATAL" in line: print("logcat:", line, flush=True)
 
 def mark(): return len(LOG)
 def wait(pattern, timeout, after):
@@ -101,9 +111,21 @@ def main():
     step("Служба жива наприкінці", adb("shell", "pidof", PKG).strip() != "")
 
 if __name__ == "__main__":
+    import signal
+    if hasattr(signal, "SIGALRM"):
+        def _timeout(*_):
+            step("Сценарій уклався в 20 хв", False, "зупинено за таймаутом")
+            for p in LOGCAT:
+                try: p.kill()
+                except Exception: pass
+            os._exit(1)
+        signal.signal(signal.SIGALRM, _timeout); signal.alarm(20 * 60)
     try: main()
     except Exception as ex:
         import traceback; traceback.print_exc(); step("Сценарій без винятків", False, repr(ex))
+    for p in LOGCAT:
+        try: p.kill()
+        except Exception: pass
     ok = all(r[1] for r in e2e.results)
     print(f"\nПройдено {sum(1 for r in e2e.results if r[1])} з {len(e2e.results)}")
     sys.exit(0 if ok else 1)
