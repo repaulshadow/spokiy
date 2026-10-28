@@ -17,6 +17,9 @@ final class Prefs {
             ASKED_BATTERY = "asked_battery";
     // останній ВІДОМИЙ стан (для переходів: коротка втрата зв'язку не повторює сирену і не «з'їдає» відбій)
     static final String KNOWN_STATE = "known_state", KNOWN_THREATS = "known_threats", KNOWN_LEVEL = "known_level";
+    // автовизначення району за геопозицією
+    static final String AUTO_PLACE = "auto_place", AUTO_REGION = "auto_region", AUTO_RAION = "auto_raion",
+            AUTO_INFO = "auto_info", AUTO_FIX = "auto_fix";
 
     static final String CH_STATUS = "status_v2", CH_ALERT = "alert_v1";
 
@@ -24,12 +27,18 @@ final class Prefs {
         return c.getSharedPreferences(NAME, Context.MODE_PRIVATE);
     }
 
+    /** Діюче місце: визначене автоматично (якщо ввімкнено й уже визначено) або обране вручну. */
+    static boolean autoActive(Context c) {
+        SharedPreferences p = get(c);
+        return p.getBoolean(AUTO_PLACE, false) && p.getString(AUTO_REGION, null) != null;
+    }
+
     static String region(Context c) {
-        return get(c).getString(REGION, "м. Київ");
+        return autoActive(c) ? get(c).getString(AUTO_REGION, "м. Київ") : get(c).getString(REGION, "м. Київ");
     }
 
     static int raion(Context c) {
-        return get(c).getInt(RAION, 0);
+        return autoActive(c) ? get(c).getInt(AUTO_RAION, 0) : get(c).getInt(RAION, 0);
     }
 
     /** "Район (Область)" или просто область. */

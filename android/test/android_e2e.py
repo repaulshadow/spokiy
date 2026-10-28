@@ -118,6 +118,34 @@ def main():
     m = mark(); change(lambda: (W.ua_o.clear(), W.ain.clear()))
     expect("Фінальний відбій", r"SOUND clear", 15, m)
 
+    # G. Автовизначення району за геопозицією (GPS емулятора: adb emu geo fix)
+    def geo(lat, lon): adb("emu", "geo", "fix", "%.6f" % lon, "%.6f" % lat)
+    A, B = (46.38470, 30.28375), (46.36390, 30.25865)   # Одеський / Білгород-Дністровський район, ~1,5 км від межі
+    ODR, OD = e2e.ODR, e2e.OD
+    change(lambda: W.ua_r.__setitem__(ODR, (OD, "red")))      # тривога в Одеському районі (офіційна)
+    time.sleep(3)
+    m = mark(); geo(*A)
+    expect("Геопозиція: перша точка — Одеський район", r"PLACE Одеський район", 90, m)
+    expect("Заїхали в район тривоги — сирена", r"SOUND alarm", 30, m)
+    m = mark(); geo(55.7558, 37.6173)
+    expect("Підміна GPS у Москву — відкинуто", r"GEO відкинуто.*поза Україною", 30, m)
+    time.sleep(3); geo(49.8397, 24.0297)
+    expect("«Стрибок» у Львів — відкинуто", r"GEO відкинуто.*стрибок", 30, m)
+    expect_none("Після підміни район не змінився", r"PLACE", 5, m)
+    m = mark()
+    for i in range(1, 13):                                      # 3 км за ~3 хв (~60 км/год)
+        geo(A[0] + (B[0] - A[0]) * i / 12, A[1] + (B[1] - A[1]) * i / 12); time.sleep(15)
+    expect("Поїздка через межу — Білгород-Дністровський район", r"PLACE Білгород-Дністровський район", 60, m)
+    expect("Виїхали з району тривоги — тихе сповіщення", r"SOUND none \(виїхали", 30, m)
+    expect_none("Виїзд — без голосу «відбій»", r"SOUND clear", 2, m)
+    m = mark()
+    for i in range(1, 13):
+        geo(B[0] + (A[0] - B[0]) * i / 12, B[1] + (A[1] - B[1]) * i / 12); time.sleep(15)
+    expect("Повернулись — знову Одеський район", r"PLACE Одеський район", 60, m)
+    expect("Повернулись у тривогу — сирена", r"SOUND alarm", 30, m)
+    m = mark(); change(lambda: W.ua_r.clear())
+    expect("Справжній відбій — звучить", r"SOUND clear", 15, m)
+
     crashes = [msg for t, tag, msg in LOG if tag == "AndroidRuntime" and ("FATAL" in msg or PKG in msg)]
     step("Без аварій програми", not crashes, crashes[0][:200] if crashes else "")
     step("Служба жива наприкінці", adb("shell", "pidof", PKG).strip() != "")

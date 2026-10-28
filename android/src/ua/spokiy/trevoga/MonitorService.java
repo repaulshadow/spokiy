@@ -11,6 +11,11 @@ import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
 import android.os.PowerManager;
+import android.location.Location;
+import android.location.LocationListener;
+import android.location.LocationManager;
+import android.os.Bundle;
+import android.content.pm.PackageManager;
 
 import java.text.SimpleDateFormat;
 import java.util.ArrayList;
@@ -36,6 +41,11 @@ public class MonitorService extends Service {
     private String lastPlace = null;
     private boolean firstCheck = true;
     private final Engine engine = new Engine();
+    // автовизначення району
+    private GeoLookup geo;
+    private GeoFilter geoFilter;
+    private boolean locStarted, movedAuto;
+    private String lastGeoReject = "";
     private final StreamClient ua = new StreamClient("trevoga-ua", "");
 
     static void start(Context c) {
@@ -50,6 +60,10 @@ public class MonitorService extends Service {
     public void onCreate() {
         super.onCreate();
         Prefs.createChannels(this);
+        // збірка для автотестів: автовизначення району ввімкнене одразу
+        org.json.JSONObject cfg = AlertSource.embeddedConfig(this);
+        if (cfg.optBoolean("fixed", false) && cfg.optBoolean("auto_place", false) && !Prefs.get(this).contains(Prefs.AUTO_PLACE))
+            Prefs.get(this).edit().putBoolean(Prefs.AUTO_PLACE, true).apply();
         startForeground(NOTIF_STATUS, statusNotification("Перевірка…"));
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "trevoga:monitor");
@@ -140,11 +154,19 @@ public class MonitorService extends Service {
         boolean partial = p.getBoolean(Prefs.PARTIAL, false);
         String place = region + "|" + raion + "|" + partial;
         if (!place.equals(lastPlace)) {
+            boolean auto = movedAuto && lastPlace != null;
             lastPlace = place;
-            firstCheck = true;
-            p.edit().remove(Prefs.THREATS).remove(Prefs.SINCE).remove(Prefs.CLEARED_AT)
-                    .remove(Prefs.KNOWN_STATE).remove(Prefs.KNOWN_THREATS).remove(Prefs.KNOWN_LEVEL).apply();
+            if (auto) {
+                // переїхали в інший район (автовизначення): порівнюємо з попереднім районом — заїхали в тривогу → сирена
+                p.edit().remove(Prefs.SINCE).remove(Prefs.CLEARED_AT).apply();
+            } else {
+                movedAuto = false;
+                firstCheck = true;
+                p.edit().remove(Prefs.THREATS).remove(Prefs.SINCE).remove(Prefs.CLEARED_AT)
+                        .remove(Prefs.KNOWN_STATE).remove(Prefs.KNOWN_THREATS).remove(Prefs.KNOWN_LEVEL).apply();
+            }
         }
+        syncLocation();
         String server = AlertSource.server(this);
         if (server.length() > 0) {
             try { engine.serverOk(AlertSource.fetchRoot(server), System.currentTimeMillis()); }
@@ -211,6 +233,14 @@ public class MonitorService extends Service {
         }
         Engine.Action act = Engine.decide(old, oldThreats, oldLevel, r);
         List<String> added = act.added;
+        boolean moved = movedAuto;
+        movedAuto = false;
+        if (moved && act.kind == Engine.CLEAR) {
+            // виїхали з району тривоги — це не відбій: тихе сповіщення без голосу «відбій»
+            L("SOUND none (виїхали з району тривоги)");
+            showAlert(this, "Ви в районі без тривоги", placeName, GREEN, true);
+            return;
+        }
         boolean quiet = p.getBoolean(Prefs.NOTIFY_ONLY, false);   // «лише сповіщення»: без голосу і сирени
         if (act.kind != Engine.NONE) L("SOUND " + new String[]{"", "ballistic", "alarm", "escalation", "newthreats", "clear"}[act.kind] + (quiet ? " (лише сповіщення)" : ""));
         if (act.kind == Engine.BALLISTIC) {
@@ -219,7 +249,7 @@ public class MonitorService extends Service {
         } else if (act.kind == Engine.ALARM) {
             if (!quiet) Sounds.alarm(this, threats);
             boolean y = r.level.equals("yellow");
-            showAlert(this, y ? "ПОВІТРЯНА ТРИВОГА — жовтий рівень" : "ПОВІТРЯНА ТРИВОГА!",
+            showAlert(this, moved ? "Ви в районі тривоги!" : y ? "ПОВІТРЯНА ТРИВОГА — жовтий рівень" : "ПОВІТРЯНА ТРИВОГА!",
                     placeName + ". Пройдіть в укриття!" + (th.length() > 0 ? "\n" + th : ""), y ? YELLOW : RED, quiet);
         } else if (act.kind == Engine.ESCALATION) {
             // Рівень підвищено: жовтий → червоний — повна сирена
@@ -323,8 +353,114 @@ public class MonitorService extends Service {
         ((NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE)).notify(NOTIF_ALERT, b.build());
     }
 
+    // ---------------- автовизначення району ----------------
+
+    private boolean locationPermitted() {
+        if (android.os.Build.VERSION.SDK_INT < 23) return true;
+        return checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == PackageManager.PERMISSION_GRANTED;
+    }
+
+    /** Увімкнути/вимкнути стеження за геопозицією відповідно до налаштування (викликається з кожної перевірки). */
+    private void syncLocation() {
+        boolean want = Prefs.get(this).getBoolean(Prefs.AUTO_PLACE, false) && locationPermitted();
+        if (want && !locStarted) startLocation();
+        else if (!want && locStarted) stopLocation();
+    }
+
+    private final LocationListener locListener = new LocationListener() {
+        public void onLocationChanged(Location l) { onLocation(l); }
+        public void onStatusChanged(String p, int s, Bundle b) { }
+        public void onProviderEnabled(String p) { }
+        public void onProviderDisabled(String p) { }
+    };
+
+    @SuppressWarnings("MissingPermission")
+    private void startLocation() {
+        try {
+            if (geo == null) {
+                java.io.InputStream in = getResources().openRawResource(R.raw.geo);
+                java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                byte[] buf = new byte[65536];
+                int n;
+                while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                in.close();
+                geo = GeoLookup.parse(new String(bo.toByteArray(), "UTF-8"));
+                geoFilter = new GeoFilter(geo);
+                // останній надійний район і точка — після перезапуску не «стрибаємо»
+                SharedPreferences p = Prefs.get(this);
+                String fix = p.getString(Prefs.AUTO_FIX, null);
+                if (fix != null && p.getString(Prefs.AUTO_REGION, null) != null) {
+                    String[] f = fix.split(",");
+                    GeoLookup.Place pl = new GeoLookup.Place();
+                    pl.region = p.getString(Prefs.AUTO_REGION, "");
+                    pl.raion = p.getInt(Prefs.AUTO_RAION, 0);
+                    geoFilter.restore(pl, new GeoFilter.Fix(Double.parseDouble(f[0]), Double.parseDouble(f[1]),
+                            Float.parseFloat(f[2]), Long.parseLong(f[3]), true, false));
+                }
+            }
+            LocationManager lm = (LocationManager) getSystemService(LOCATION_SERVICE);
+            android.os.Looper lp = thread.getLooper();
+            // мережа (Wi-Fi/вишки — їх РЕБ не глушить) — частіше; GPS — рідше (батарея); пасивно — точки інших програм
+            if (lm.getAllProviders().contains(LocationManager.NETWORK_PROVIDER))
+                lm.requestLocationUpdates(LocationManager.NETWORK_PROVIDER, 60000, 100, locListener, lp);
+            boolean fast = AlertSource.embeddedConfig(this).optBoolean("geo_fast", false);   // лише збірка для автотестів
+            if (lm.getAllProviders().contains(LocationManager.GPS_PROVIDER))
+                lm.requestLocationUpdates(LocationManager.GPS_PROVIDER, fast ? 1000 : 120000, fast ? 0 : 200, locListener, lp);
+            if (lm.getAllProviders().contains(LocationManager.PASSIVE_PROVIDER))
+                lm.requestLocationUpdates(LocationManager.PASSIVE_PROVIDER, 30000, 50, locListener, lp);
+            for (String pr : lm.getAllProviders()) {
+                try { Location l = lm.getLastKnownLocation(pr); if (l != null) onLocation(l); } catch (Exception ignored) { }
+            }
+            locStarted = true;
+            L("GEO стеження увімкнено");
+        } catch (Throwable e) {
+            L("GEO помилка: " + e);
+            Prefs.get(this).edit().putString(Prefs.AUTO_INFO, "Не вдалося ввімкнути геопозицію: " + e.getMessage()).apply();
+        }
+    }
+
+    private void stopLocation() {
+        try { ((LocationManager) getSystemService(LOCATION_SERVICE)).removeUpdates(locListener); } catch (Exception ignored) { }
+        locStarted = false;
+        L("GEO стеження вимкнено");
+    }
+
+    private void onLocation(Location l) {
+        if (geoFilter == null || !Prefs.get(this).getBoolean(Prefs.AUTO_PLACE, false)) return;
+        boolean mock = false;
+        try { mock = l.isFromMockProvider(); } catch (Throwable ignored) { }
+        GeoFilter.Fix f = new GeoFilter.Fix(l.getLatitude(), l.getLongitude(), l.hasAccuracy() ? l.getAccuracy() : Float.NaN,
+                l.getTime(), LocationManager.GPS_PROVIDER.equals(l.getProvider()), mock);
+        GeoFilter.Decision d = geoFilter.offer(f);
+        SharedPreferences p = Prefs.get(this);
+        String time = new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date());
+        String src = f.gps ? "GPS" : "мережа";
+        if (d.accepted) {
+            GeoFilter.Fix a = geoFilter.lastAccepted();
+            SharedPreferences.Editor e = p.edit().putString(Prefs.AUTO_FIX, a.lat + "," + a.lon + "," + a.acc + "," + a.time);
+            if (d.place != null) {
+                e.putString(Prefs.AUTO_REGION, d.place.region).putInt(Prefs.AUTO_RAION, d.place.raion);
+                e.putString(Prefs.AUTO_INFO, d.place.title() + " · " + src + ", ±" + Math.round(f.acc) + " м, " + time
+                        + (d.changed ? " · " + d.reason : ""));
+            }
+            e.apply();
+            if (d.changed) {
+                L("PLACE " + d.place.title() + " (" + d.reason + ", " + src + " ±" + Math.round(f.acc) + " м)");
+                movedAuto = lastPlace != null;
+                if (handler != null) { handler.removeCallbacks(loop); handler.post(loop); }
+            }
+        } else {
+            if (!d.reason.equals(lastGeoReject)) L("GEO відкинуто (" + src + "): " + d.reason);
+            lastGeoReject = d.reason;
+            String cur = geoFilter.current != null ? geoFilter.current.title() : "ще не визначено";
+            p.edit().putString(Prefs.AUTO_INFO, cur + " · " + time + " відкинуто точку: " + d.reason).apply();
+        }
+    }
+
     @Override
     public void onDestroy() {
+        if (locStarted) stopLocation();
         ua.shutdown();
         if (handler != null) handler.removeCallbacksAndMessages(null);
         if (thread != null) thread.quit();

@@ -47,7 +47,10 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     private LinearLayout statusCard;
     private TextView title, place, detail, footer, soundInfo;
     private FlowLayout chips;
-    private Spinner raionSpinner;
+    private Spinner raionSpinner, regionSpinner;
+    private Switch autoSwitch;
+    private TextView autoInfo;
+    static final int REQ_LOCATION = 41;
     private Switch enabledSwitch;
     private final List<Integer> raionUids = new ArrayList<Integer>();
     private final Handler ticker = new Handler();
@@ -142,6 +145,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         LinearLayout where = card("Місце");
         where.addView(fieldLabel("Область"));
         final Spinner spinner = new Spinner(this);
+        regionSpinner = spinner;
         ArrayAdapter<String> ad = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, AlertSource.REGIONS);
         ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         spinner.setAdapter(ad);
@@ -188,6 +192,25 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             }
         });
         where.addView(partial);
+        // автовизначення району за геопозицією (з перевіркою правдоподібності точок — РЕБ, підміна GPS)
+        autoSwitch = new Switch(this);
+        autoSwitch.setText("Визначати район автоматично (геопозиція)");
+        autoSwitch.setTextColor(TEXT);
+        autoSwitch.setTextSize(15);
+        autoSwitch.setPadding(0, dp(12), 0, 0);
+        autoSwitch.setChecked(prefs.getBoolean(Prefs.AUTO_PLACE, false));
+        autoSwitch.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
+            public void onCheckedChanged(CompoundButton c, boolean v) {
+                prefs.edit().putBoolean(Prefs.AUTO_PLACE, v).apply();
+                if (v) askLocation();
+                updateAutoUi();
+                if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.checkNow(MainActivity.this);
+            }
+        });
+        where.addView(autoSwitch);
+        autoInfo = text("", 12, MUTED, false);
+        where.addView(autoInfo);
+        updateAutoUi();
         settings.addView(where, matchWrap(dp(12)));
 
         // ---------- сповіщення ----------
@@ -551,7 +574,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             names.add(Locations.RAION_NAME[i]);
             if (Locations.RAION_UID[i] == cur) sel = names.size() - 1;
         }
-        if (sel == 0 && cur != 0) prefs.edit().putInt(Prefs.RAION, 0).apply();
+        if (sel == 0 && cur != 0 && !Prefs.autoActive(this)) prefs.edit().putInt(Prefs.RAION, 0).apply();
         ArrayAdapter<String> ad = new ArrayAdapter<String>(this, android.R.layout.simple_spinner_item, names);
         ad.setDropDownViewResource(android.R.layout.simple_spinner_dropdown_item);
         raionSpinner.setAdapter(ad);
@@ -618,6 +641,46 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             ticker.postDelayed(this, 30000);   // оновлюємо «триває N хв»
         }
     };
+
+    private boolean hasLocation() {
+        if (android.os.Build.VERSION.SDK_INT < 23) return true;
+        return checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED;
+    }
+
+    private void askLocation() {
+        if (hasLocation() || android.os.Build.VERSION.SDK_INT < 23) return;
+        requestPermissions(new String[]{android.Manifest.permission.ACCESS_FINE_LOCATION,
+                android.Manifest.permission.ACCESS_COARSE_LOCATION}, REQ_LOCATION);
+    }
+
+    @Override
+    public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+        if (req != REQ_LOCATION) return;
+        updateAutoUi();
+        if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.checkNow(this);
+    }
+
+    private void updateAutoUi() {
+        if (autoSwitch == null) return;
+        boolean auto = prefs.getBoolean(Prefs.AUTO_PLACE, false);
+        if (autoSwitch.isChecked() != auto) autoSwitch.setChecked(auto);
+        boolean active = Prefs.autoActive(this);
+        regionSpinner.setEnabled(!auto);
+        raionSpinner.setEnabled(!auto);
+        if (active) {
+            int i = AlertSource.indexOf(Prefs.region(this));
+            if (i >= 0 && regionSpinner.getSelectedItemPosition() != i) { regionSpinner.setSelection(i); fillRaions(); }
+            int ri = raionUids.indexOf(Prefs.raion(this));
+            if (ri >= 0 && raionSpinner.getSelectedItemPosition() != ri) raionSpinner.setSelection(ri);
+        }
+        String info;
+        if (!auto) info = "Район обирається вручну. Автовизначення: мережа (Wi-Fi/вишки) і GPS; неправдоподібні точки"
+                + " (РЕБ, підміна, «стрибки» в іншу країну) відкидаються, район лишається останній надійний.";
+        else if (!hasLocation()) info = "Немає дозволу на геопозицію. Дозвольте його (на Android 10+ — «Дозволяти завжди»).";
+        else info = prefs.getString(Prefs.AUTO_INFO, "Визначаю місце… Поки що — обране вручну.");
+        autoInfo.setText(info);
+    }
 
     @Override
     protected void onResume() {
@@ -695,5 +758,6 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         soundInfo.setText("Сирена: " + (prefs.contains(Prefs.SOUND_ALARM) ? "свій файл" : "вбудована")
                 + " · Відбій: " + (prefs.contains(Prefs.SOUND_CLEAR) ? "свій файл" : "вбудований"));
         if (enabledSwitch.isChecked() != on) enabledSwitch.setChecked(on);
+        updateAutoUi();
     }
 }

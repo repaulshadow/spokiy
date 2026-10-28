@@ -16,6 +16,7 @@ mkdir -p res/raw && cp ../config.json res/raw/config.json
 javac --release 8 -nowarn -encoding UTF-8 -classpath "$JSON:$SDK" -d build/test/classes build/test/gen/ua/spokiy/trevoga/R.java src/ua/spokiy/trevoga/*.java test/*.java
 CP="$JSON:build/test/classes:$SDK"
 java -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -cp "$CP" ua.spokiy.trevoga.AndroidLogicTests
+java -Dfile.encoding=UTF-8 -Dstdout.encoding=UTF-8 -cp "$CP" ua.spokiy.trevoga.GeoTests res/raw/geo.json
 if [ "$1" = "stream" ]; then
   python3 ../test/fake_ws.py 8790 build/test/ws_res.json &
   P=$!

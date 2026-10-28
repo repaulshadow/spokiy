@@ -10,7 +10,7 @@ BT=$(ls -d "$SDKROOT"/build-tools/* | sort -V | tail -1)
 PLAT=$(ls -d "$SDKROOT"/platforms/android-* | grep -v -e beta -e ext | sort -V | tail -1)/android.jar
 echo "build-tools: $BT; platform: $PLAT"
 rm -rf build/ci && mkdir -p build/ci/gen build/ci/classes build/ci/dex res/raw
-if [ -n "$SERVER_URL" ]; then printf '{"server": "%s", "fixed": true}\n' "$SERVER_URL" > res/raw/config.json; else cp ../config.json res/raw/config.json; fi
+if [ -n "$SERVER_URL" ]; then printf '{"server": "%s", "fixed": true, "auto_place": true, "geo_fast": true}\n' "$SERVER_URL" > res/raw/config.json; else cp ../config.json res/raw/config.json; fi
 "$BT/aapt" package -f -m -J build/ci/gen -M AndroidManifest.xml -S res -I "$PLAT" -F build/ci/unsigned.apk
 javac --release 8 -nowarn -encoding UTF-8 -classpath "$PLAT" -d build/ci/classes build/ci/gen/ua/spokiy/trevoga/R.java src/ua/spokiy/trevoga/*.java
 "$BT/d8" --min-api 21 --lib "$PLAT" --output build/ci/dex $(find build/ci/classes -name '*.class')
