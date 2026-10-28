@@ -20,3 +20,5 @@ jobs:
             body=$(curl -s -m 30 -A "Trevoga-check/1.0" "$S$p" | head -c 3500 | tr '\n' ' ')
             echo "::notice title=$p::$body"
           done
+      - if: ${{ contains(inputs.paths, '/ua-hooks') }}
+        run: python3 test/ua_hooks.py
