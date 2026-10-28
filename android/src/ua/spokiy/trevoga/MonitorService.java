@@ -114,6 +114,7 @@ public class MonitorService extends Service {
     }
 
     private void refreshConfigIfDue() {
+        if (AlertSource.embeddedFixed(this)) return;   // збірка для автотестів: сервер-імітація
         SharedPreferences p = Prefs.get(this);
         long last = p.getLong(Prefs.CONFIG_AT, 0);
         if (System.currentTimeMillis() - last < 6 * 3600 * 1000L) return;

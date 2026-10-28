@@ -106,6 +106,21 @@ final class AlertSource {
         }
     }
 
+    /** Вбудований config.json має "fixed": true — адресу сервера не оновлюємо з GitHub (збірка для автотестів). */
+    static boolean embeddedFixed(Context ctx) {
+        try {
+            InputStream in = ctx.getResources().openRawResource(R.raw.config);
+            BufferedReader r = new BufferedReader(new InputStreamReader(in, "UTF-8"));
+            StringBuilder sb = new StringBuilder();
+            String line;
+            while ((line = r.readLine()) != null) sb.append(line);
+            r.close();
+            return new JSONObject(sb.toString()).optBoolean("fixed", false);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
     /** null — не вдалося завантажити (наприклад, репозиторій закритий). */
     static String fetchServer() {
         try {
