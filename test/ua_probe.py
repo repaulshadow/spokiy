@@ -3,7 +3,7 @@ import json, os, time, urllib.request
 KEY = os.environ.get("UA_KEY", "")
 B = "https://api.ukrainealarm.com"
 def get(path, auth=True):
-    h = {"accept": "application/json", "User-Agent": "Trevoga/1.0 (+https://github.com/repaulshadow/spokiy)"}
+    h = {"accept": "application/json,text/html;q=0.9,*/*;q=0.8", "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/130.0 Safari/537.36", "Accept-Language": "uk,en;q=0.8"}
     if auth: h["Authorization"] = KEY
     t = time.time()
     r = urllib.request.urlopen(urllib.request.Request(B + path, headers=h), timeout=30)
