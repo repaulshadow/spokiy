@@ -1,0 +1,23 @@
+name: Geo data (Android)
+
+# Оновлює android/res/raw/geo.json — межі районів для автовизначення району (з карти NEPTUN).
+on: workflow_dispatch
+
+permissions:
+  contents: write
+
+jobs:
+  geo:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: pip install --quiet shapely
+      - run: python3 tools/make_geo.py
+      - name: Commit
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add android/res/raw/geo.json
+          git diff --cached --quiet || git commit -m "Geo data for Android auto raion (from NEPTUN map)"
+          git push
