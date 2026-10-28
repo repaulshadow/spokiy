@@ -10,7 +10,7 @@ on:
 
 jobs:
   measure:
-    runs-on: [self-hosted, trevoga]   # Mac користувача (хмарні хвилини GitHub не витрачаються)
+    runs-on: ubuntu-latest
     timeout-minutes: 360
     env:
       ALERTS_TOKEN: ${{ secrets.ALERTS_TOKEN }}

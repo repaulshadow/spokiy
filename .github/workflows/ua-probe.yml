@@ -1,0 +1,21 @@
+name: UkraineAlarm probe
+
+# Службове: опис API UkraineAlarm і пробні запити з ключем (секрет UKRAINEALARM_TOKEN).
+on:
+  workflow_dispatch:
+
+jobs:
+  probe:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UA_KEY: ${{ secrets.UKRAINEALARM_TOKEN }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 test/ua_probe.py
+      - uses: actions/upload-artifact@v4
+        if: always()
+        with:
+          name: swagger
+          path: swagger.json

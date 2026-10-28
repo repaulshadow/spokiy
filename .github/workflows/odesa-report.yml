@@ -12,7 +12,7 @@ on:
 
 jobs:
   report:
-    runs-on: [self-hosted, trevoga]   # Mac користувача (хмарні хвилини GitHub не витрачаються)
+    runs-on: ubuntu-latest
     timeout-minutes: 10
     env:
       ALERTS_TOKEN: ${{ secrets.ALERTS_TOKEN }}
