@@ -1,0 +1,13 @@
+name: GC timer probe
+on: workflow_dispatch
+jobs:
+  probe:
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v5
+      - shell: cmd
+        run: |
+          %WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe /nologo /out:g.exe test\probe\gctimer.cs
+          g.exe > out.txt
+          python -c "print('::notice title=GC timer::' + open('out.txt', encoding='cp866', errors='replace').read())"
+          python -c "print('::notice title=GC timer utf8::' + open('out.txt', 'rb').read().decode('utf-8','replace'))"
