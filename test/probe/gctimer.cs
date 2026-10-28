@@ -6,6 +6,6 @@ class P {
     Make();
     for (int i = 0; i < 5; i++) { GC.Collect(); GC.WaitForPendingFinalizers(); Thread.Sleep(100); }
     Thread.Sleep(2500);
-    Console.WriteLine(fired == 0 ? "таймер знищено збирачем сміття (не спрацював)" : "спрацював");
+    Console.WriteLine(fired == 0 ? "COLLECTED: timer did not fire" : "FIRED");
   }
 }

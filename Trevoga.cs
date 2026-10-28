@@ -23,7 +23,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("3.3.0.0")]
+[assembly: System.Reflection.AssemblyVersion("3.4.0.0")]
 
 namespace Trevoga
 {
@@ -326,6 +326,16 @@ namespace Trevoga
                     lock (lk) { if (queue.Count > 0 && queue.Peek() == body) queue.Dequeue(); }
                 }
             }
+        }
+
+        /// <summary>Під час виходу: спробувати дослати чергу, чекаючи не довше ms.</summary>
+        public static void FlushSync(int ms)
+        {
+            lock (lk) { if (queue.Count == 0) return; }
+            Thread t = new Thread(delegate() { lock (lk) busy = true; Pump(); });
+            t.IsBackground = true;
+            t.Start();
+            t.Join(ms);
         }
 
         /// <summary>Періодично: дослати те, що лишилось у черзі.</summary>
@@ -1876,6 +1886,8 @@ namespace Trevoga
         Label lblFooter;
         NotifyIcon tray;
         UiTimer timer, configTimer, updateTimer;
+        // Усі таймери тримаємо тут: таймер без посилання збирач сміття може знищити до спрацювання
+        readonly List<UiTimer> timers = new List<UiTimer>();
         bool justUpdated = false, updateReady = false, updateBusy = false;
         string updateVersion = null;
         Icon icoRed, icoGreen, icoGray, icoYellow, icoPurple;
@@ -2087,6 +2099,7 @@ namespace Trevoga
             if (startHidden)
             {
                 UiTimer re = new UiTimer(this);
+                timers.Add(re);
                 re.Interval = 60000;
                 re.Tick += delegate { re.Stop(); ReAddTray(); };
                 re.Start();
@@ -2100,12 +2113,33 @@ namespace Trevoga
             Reporter.Server = server;
             Reporter.Id = settings.Id;
             Reporter.Send("start", "place", PlaceKey());
+            // «Живий» раз на 30 хв: щоб у звіті відрізняти «комп'ютер вимкнений» від «програма пропустила»
+            UiTimer alive = new UiTimer(this);
+            alive.Interval = settings.Test ? 10000 : 30 * 60 * 1000;
+            alive.Tick += delegate
+            {
+                Reporter.Send("alive", "place", PlaceKey(), "stream", NeptunStream.Fresh ? "1" : "0",
+                    "st", state.ToString(), "srv_ok", lastServerError == null ? "1" : "0");
+            };
+            alive.Start();
+            timers.Add(alive);
 
             // Нова версія після оновлення працює хвилину — підтверджуємо, резервну копію можна прибрати
             UiTimer confirm = new UiTimer(this);
+            timers.Add(confirm);
             confirm.Interval = settings.Test ? 15000 : 60000;
             confirm.Tick += delegate { confirm.Stop(); Updater.Confirm(); };
             confirm.Start();
+
+            // Автотести: частий примусовий збір сміття, щоб помилки з втраченими посиланнями проявлялися одразу
+            if (settings.Test)
+            {
+                UiTimer gc = new UiTimer(this);
+                gc.Interval = 3000;
+                gc.Tick += delegate { GC.Collect(); GC.WaitForPendingFinalizers(); };
+                gc.Start();
+                timers.Add(gc);
+            }
 
             // Службовий сигнал для автотестів: штучний збій
             if (settings.Test)
@@ -2351,6 +2385,9 @@ namespace Trevoga
                 tray.ShowBalloonTip(3000, "Тривога", "Програма далі стежить за тривогою.", ToolTipIcon.Info);
                 return;
             }
+            Log.W("EXIT " + e.CloseReason);
+            Reporter.Send("stop", "reason", e.CloseReason.ToString(), "place", PlaceKey());
+            Reporter.FlushSync(3000);
             timer.Stop();
             configTimer.Stop();
             Sounds.Stop();

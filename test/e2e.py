@@ -298,6 +298,7 @@ def main():
     step("Звіт: тривога з часом початку", any(r.get("e") == "state" and r.get("st") == "Alert" and r.get("since") for r in reps))
     step("Звіт: відбій", any(r.get("e") == "state" and r.get("st") == "Clear" and r.get("old") == "Alert" for r in reps))
     step("Звіт: сирена і звук відбою", ("sound", "alarm") in kinds and ("sound", "clear") in kinds)
+    step("Звіт: «живий» щопівгодини (у тесті — щохвилини)", any(r.get("e") == "alive" and r.get("stream") in ("0", "1") for r in reps))
     step("Звіт: місце і id", all(r.get("id") and len(r["id"]) == 12 for r in reps) and any(ODR in (r.get("place") or "") for r in reps))
     step("Звіт: швидкий відбій під час падіння сервера теж дійшов (черга)",
          sum(1 for r in reps if r.get("e") == "sound" and r.get("kind") == "clear") >= 5,

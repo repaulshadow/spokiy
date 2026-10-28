@@ -9,5 +9,6 @@ jobs:
         run: |
           %WINDIR%\Microsoft.NET\Framework\v4.0.30319\csc.exe /nologo /out:g.exe test\probe\gctimer.cs
           g.exe > out.txt
-          python -c "print('::notice title=GC timer::' + open('out.txt', encoding='cp866', errors='replace').read())"
-          python -c "print('::notice title=GC timer utf8::' + open('out.txt', 'rb').read().decode('utf-8','replace'))"
+          type out.txt
+      - shell: bash
+        run: echo "::notice title=GC timer on .NET Framework::$(cat out.txt)"
