@@ -86,6 +86,9 @@ for dev, rs in devices.items():
         if da is not None: d_alarm.append(da)
         if dc is not None: d_clear.append(dc)
         rows.append(f"| {k(a['st'])} | {'' if da is None else f'+{da:.1f} с'} | {'' if dc is None else f'+{dc:.1f} с'} |")
+    print("::notice title=сирі звіти " + dev + "::" + " ¦ ".join(
+        f"{k(T(r['srv']))} {r.get('e')} {r.get('st') or r.get('kind') or ''} {('було ' + r['old']) if r.get('old') else ''} {r.get('src') or ''} {r.get('note') or ''} first={r.get('first','')}"
+        for r in rs[-40:])[:3800])
     lines.append("Сирена після офіційного початку тривоги: " + stats(d_alarm))
     lines.append("Відбій після офіційного кінця: " + stats(d_clear))
     missed = sum(1 for r in rows if "| |" in r.split(" | ", 1)[1][:4])
