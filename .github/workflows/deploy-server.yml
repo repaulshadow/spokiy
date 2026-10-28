@@ -81,6 +81,13 @@ jobs:
           if [ -z "$ALERTS_TOKEN" ]; then echo "ALERTS_TOKEN не задан — пропускаю"; exit 0; fi
           printf '%s' "$ALERTS_TOKEN" | npx --yes wrangler@4.145.0 secret put ALERTS_TOKEN
 
+      - name: Set UkraineAlarm key
+        env:
+          UA_TOKEN: ${{ secrets.UKRAINEALARM_TOKEN }}
+        run: |
+          if [ -z "$UA_TOKEN" ]; then echo "UKRAINEALARM_TOKEN не задан — пропускаю"; exit 0; fi
+          printf '%s' "$UA_TOKEN" | npx --yes wrangler@4.145.0 secret put UA_TOKEN
+
       - name: Save server address to config.json
         run: |
           url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' deploy.log | head -1 || true)

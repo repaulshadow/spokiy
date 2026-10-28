@@ -1,0 +1,21 @@
+name: UkraineAlarm webhook
+
+# Підписка webhook UkraineAlarm на наш сервер (один раз після налаштування; повторно — якщо змінилась адреса сервера).
+on:
+  workflow_dispatch:
+    inputs:
+      method:
+        description: "POST — підписатися, PATCH — оновити адресу, DELETE — відписатися"
+        default: "POST"
+
+jobs:
+  hook:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    env:
+      UA_KEY: ${{ secrets.UKRAINEALARM_TOKEN }}
+      METHOD: ${{ inputs.method }}
+      PYTHONUTF8: "1"
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 test/ua_webhook.py
