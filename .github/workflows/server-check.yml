@@ -1,0 +1,22 @@
+name: Server check
+
+# Стан сервера: /health і останні webhook UkraineAlarm.
+on:
+  workflow_dispatch:
+    inputs:
+      paths:
+        description: "Шляхи через пробіл"
+        default: "/health /ua-hooks"
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v5
+      - run: |
+          S=$(python3 -c 'import json;print(json.load(open("config.json"))["server"])')
+          for p in ${{ inputs.paths }}; do
+            body=$(curl -s -m 30 -A "Trevoga-check/1.0" "$S$p" | head -c 3500 | tr '\n' ' ')
+            echo "::notice title=$p::$body"
+          done
