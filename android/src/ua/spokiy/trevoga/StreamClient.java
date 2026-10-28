@@ -23,7 +23,11 @@ import org.json.JSONObject;
  * ознаки життя протягом 35 с (heartbeat іде раз на 15 с).
  */
 final class StreamClient {
-    interface Listener { void changed(); }
+    interface Listener {
+        void changed();
+        /** З'єднання втрачено — варто одразу перейти на опитування. */
+        void lost();
+    }
     interface Logger { void log(String line); }
     static volatile Logger logger;
 
@@ -89,8 +93,11 @@ final class StreamClient {
             long t0 = System.currentTimeMillis();
             try { runOnce(); setStatus("закрито сервером"); }
             catch (Exception e) { setStatus(e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName()); }
-            synchronized (lk) { connected = false; }
+            boolean was;
+            synchronized (lk) { was = connected && haveData; connected = false; }
             if (stop) break;
+            Listener ls = listener;
+            if (was && ls != null) try { ls.lost(); } catch (Throwable ignored) { }
             if (System.currentTimeMillis() - t0 > 60000) fails = 0;
             fails++;
             try { Thread.sleep(Math.min(60, 2 * fails) * 1000L); } catch (InterruptedException e) { break; }

@@ -19,6 +19,7 @@ public class AndroidStreamTest {
                 synchronized (seq) { seq.add(m); }
                 System.out.printf("+%.1fs подія %s%n", (System.currentTimeMillis() - t0) / 1000.0, m);
             }
+            public void lost() { System.out.printf("+%.1fs втрачено%n", (System.currentTimeMillis() - t0) / 1000.0); }
         };
         c.start();
         boolean was = false;

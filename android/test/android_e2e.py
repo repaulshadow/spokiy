@@ -87,8 +87,10 @@ def main():
     expect("Тривога з UkraineAlarm — швидкість", r"STATE Alert.*UkraineAlarm наживо", 15, m, t, max_latency=2.0)
     expect("Сирена", r"SOUND alarm", 5, m)
     # 2. NEPTUN і alerts.in.ua теж показують (через опитування), потім офіційний відбій — одразу
+    m = mark()
     change(lambda: (W.nep_o.__setitem__(KYIV, ("red", ["Ракетна загроза"])), W.ain.__setitem__(KYIV_UID, (None, "red", ["unspecified_missiles"], e2e.NOW))))
-    time.sleep(14)
+    # поки потік працює, запасні джерела опитуються раз на 30 с — чекаємо, доки вони теж покажуть тривогу
+    expect("Запасні джерела (опитування) теж показують тривогу", r"STATE Alert.*unspecified_missiles", 45, m)
     m = mark(); t = change(lambda: W.ua_o.pop(KYIV))
     expect("Офіційний відбій — одразу, не чекаючи NEPTUN", r"STATE Clear.*відбій за UkraineAlarm", 15, m, t, max_latency=2.0)
     expect("Звук відбою", r"SOUND clear", 5, m)

@@ -65,6 +65,10 @@ public class MonitorService extends Service {
         ua.url = streamUrl(AlertSource.server(this));
         ua.listener = new StreamClient.Listener() {
             public void changed() { if (handler != null) handler.post(recompute); }
+            public void lost() {
+                // потоку немає — одразу опитуємо сервер і далі часто (а не раз на 30 с)
+                if (handler != null) { handler.removeCallbacks(loop); handler.post(loop); }
+            }
         };
         ua.start();
     }

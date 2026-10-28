@@ -208,7 +208,7 @@ public class AndroidLogicTests {
                 + "\"communities\":[{\"oblast\":\"" + OD + "\",\"raion\":\"" + ODR + "\",\"name\":\"Х\",\"since\":\"2026-10-28T10:00:00Z\",\"level\":\"yellow\"}]}}";
         StreamClient c = new StreamClient("t", "");
         final int[] n = {0};
-        c.listener = new StreamClient.Listener() { public void changed() { n[0]++; } };
+        c.listener = new StreamClient.Listener() { public void changed() { n[0]++; } public void lost() { } };
         c.handle(msg);
         c.handle(msg);                                   // те саме — без події
         c.handle("{\"type\":\"heartbeat\"}");
