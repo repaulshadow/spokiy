@@ -19,7 +19,10 @@ import java.util.Date;
 import java.util.List;
 import java.util.Locale;
 
-/** Фоновий сервіс: раз на 10 секунд (або як скаже сервер) перевіряє тривогу і грає звук при зміні статусу. */
+/**
+ * Фоновий сервіс. Офіційні тривоги UkraineAlarm приходять потоком нашого сервера одразу; крім того, раз на 10 с
+ * (коли потік працює — раз на 30 с) опитуємо сервер (alerts.in.ua + NEPTUN як запасні джерела).
+ */
 public class MonitorService extends Service {
     static final int INTERVAL_MS = 10000;
     private int intervalMs = INTERVAL_MS;   // сервер може змінити частоту
@@ -32,6 +35,8 @@ public class MonitorService extends Service {
     private PowerManager.WakeLock wakeLock;
     private String lastPlace = null;
     private boolean firstCheck = true;
+    private final Engine engine = new Engine();
+    private final StreamClient ua = new StreamClient("trevoga-ua", "");
 
     static void start(Context c) {
         c.startService(new Intent(c, MonitorService.class));
@@ -53,6 +58,15 @@ public class MonitorService extends Service {
         thread.start();
         handler = new Handler(thread.getLooper());
         handler.post(loop);
+        // Потік нашого сервера з офіційними тривогами UkraineAlarm
+        StreamClient.userAgent = "Trevoga-Android/" + versionName();
+        StreamClient.logger = new StreamClient.Logger() { public void log(String line) { L(line); } };
+        L("START v" + versionName());
+        ua.url = streamUrl(AlertSource.server(this));
+        ua.listener = new StreamClient.Listener() {
+            public void changed() { if (handler != null) handler.post(recompute); }
+        };
+        ua.start();
     }
 
     @Override
@@ -74,9 +88,30 @@ public class MonitorService extends Service {
     private final Runnable loop = new Runnable() {
         public void run() {
             try { checkOnce(); } catch (Throwable ignored) { }
-            handler.postDelayed(this, intervalMs);
+            // потік працює — опитування лише для запасних джерел, рідше (батарея)
+            handler.postDelayed(this, ua.fresh() ? Math.max(intervalMs, 30000) : intervalMs);
         }
     };
+
+    private final Runnable recompute = new Runnable() {
+        public void run() {
+            try { applyFromEngine(); } catch (Throwable ignored) { }
+        }
+    };
+
+    /** Журнал рішень у системний журнал (logcat, тег Trevoga) — для діагностики й автотестів. */
+    static void L(String line) { try { android.util.Log.i("Trevoga", line); } catch (Throwable ignored) { } }
+
+    static String streamUrl(String server) {
+        if (server == null || server.length() == 0) return "";
+        String s = server;
+        while (s.endsWith("/")) s = s.substring(0, s.length() - 1);
+        return s.replace("https://", "wss://").replace("http://", "ws://") + "/stream";
+    }
+
+    private String versionName() {
+        try { return getPackageManager().getPackageInfo(getPackageName(), 0).versionName; } catch (Exception e) { return "?"; }
+    }
 
     private void refreshConfigIfDue() {
         SharedPreferences p = Prefs.get(this);
@@ -84,7 +119,11 @@ public class MonitorService extends Service {
         if (System.currentTimeMillis() - last < 6 * 3600 * 1000L) return;
         p.edit().putLong(Prefs.CONFIG_AT, System.currentTimeMillis()).apply();
         String s = AlertSource.fetchServer();
-        if (s != null) p.edit().putString(Prefs.SERVER, s).apply();
+        if (s != null) {
+            p.edit().putString(Prefs.SERVER, s).apply();
+            String su = streamUrl(s);
+            if (!su.equals(ua.url)) { ua.shutdown(); ua.url = su; ua.start(); }
+        }
     }
 
     private void checkOnce() {
@@ -98,28 +137,43 @@ public class MonitorService extends Service {
         if (!place.equals(lastPlace)) {
             lastPlace = place;
             firstCheck = true;
-            p.edit().remove(Prefs.THREATS).remove(Prefs.SINCE).remove(Prefs.CLEARED_AT).apply();
+            p.edit().remove(Prefs.THREATS).remove(Prefs.SINCE).remove(Prefs.CLEARED_AT)
+                    .remove(Prefs.KNOWN_STATE).remove(Prefs.KNOWN_THREATS).remove(Prefs.KNOWN_LEVEL).apply();
         }
+        String server = AlertSource.server(this);
+        if (server.length() > 0) {
+            try { engine.serverOk(AlertSource.fetchRoot(server), System.currentTimeMillis()); }
+            catch (Exception e) { engine.serverFailed(AlertSource.shortErr(e)); }
+        } else engine.serverFailed("сервер ще не налаштовано");
+        applyFromEngine();
+    }
+
+    /** Зведення (сервер + потік) і реакція: звук, сповіщення. Викликається з опитування і на кожну зміну в потоці. */
+    private void applyFromEngine() {
+        SharedPreferences p = Prefs.get(this);
+        String region = Prefs.region(this);
+        int raion = Prefs.raion(this);
+        boolean partial = p.getBoolean(Prefs.PARTIAL, false);
+        String place = region + "|" + raion + "|" + partial;
+        if (!place.equals(lastPlace)) return;   // місце щойно змінили — дочекаємося checkOnce
         String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
 
         AlertSource.Result r;
         try {
-            r = AlertSource.check(AlertSource.server(this), region, raion, partial);
+            r = engine.compute(ua.fresh() ? ua.data() : null, region, raion, partial, System.currentTimeMillis());
+            if (r == null) r = AlertSource.fallback(region, raion, partial, engine.lastServerError);   // ні сервера, ні потоку
             if (r.pollS >= 5 && r.pollS <= 120) intervalMs = r.pollS * 1000;
         } catch (Exception e) {
             p.edit().putString(Prefs.ERROR, e.getMessage()).apply();
             updateStatus(p.getInt(Prefs.STATE, AlertSource.UNKNOWN), Prefs.place(this), true);
             return;
         }
-        if (!place.equals(Prefs.region(this) + "|" + Prefs.raion(this) + "|" + p.getBoolean(Prefs.PARTIAL, false)))
-            return; // місце змінили під час запиту
 
-        int old = firstCheck ? AlertSource.UNKNOWN : p.getInt(Prefs.STATE, AlertSource.UNKNOWN);
-        List<String> oldThreats = parseList(p.getString(Prefs.THREATS, ""));
-        String oldLevel = old == AlertSource.ALERT ? p.getString(Prefs.LEVEL, "") : "";
+        // Порівнюємо з останнім ВІДОМИМ станом: коротка втрата зв'язку посеред тривоги не повторює сирену і не «з'їдає» відбій
+        int old = firstCheck ? AlertSource.UNKNOWN : p.getInt(Prefs.KNOWN_STATE, AlertSource.UNKNOWN);
+        List<String> oldThreats = parseList(p.getString(Prefs.KNOWN_THREATS, ""));
+        String oldLevel = old == AlertSource.ALERT ? p.getString(Prefs.KNOWN_LEVEL, "") : "";
         List<String> threats = r.threats;
-        List<String> added = new ArrayList<String>();
-        if (r.state == AlertSource.ALERT) for (String t : threats) if (!oldThreats.contains(t)) added.add(t);
 
         long since = p.getLong(Prefs.SINCE, 0);
         long clearedAt = p.getLong(Prefs.CLEARED_AT, 0);
@@ -128,11 +182,14 @@ public class MonitorService extends Service {
             if (r.since > 0) since = r.since;
             else if (old != AlertSource.ALERT) since = firstCheck ? 0 : now;
             clearedAt = 0;
-        } else {
+        } else if (r.state == AlertSource.CLEAR) {
             since = 0;
             if (old == AlertSource.ALERT) clearedAt = now;
         }
 
+        if (r.state != p.getInt(Prefs.STATE, -1) || !r.level.equals(p.getString(Prefs.LEVEL, "")) || !join(threats).equals(p.getString(Prefs.THREATS, "")))
+            L("STATE " + (r.state == AlertSource.ALERT ? "Alert" : r.state == AlertSource.CLEAR ? "Clear" : "Unknown") + " level=" + r.level
+                    + " threats=" + join(threats) + " src=" + r.source + (r.note.length() > 0 ? " note=" + r.note : ""));
         p.edit().putInt(Prefs.STATE, r.state).putString(Prefs.STATUS_TIME, time).putString(Prefs.THREATS, join(threats))
                 .putString(Prefs.SOURCE, r.source).putString(Prefs.NOTE, r.note).putBoolean(Prefs.DISAGREE, r.disagree).putString(Prefs.LEVEL, r.level)
                 .putLong(Prefs.SINCE, since).putLong(Prefs.CLEARED_AT, clearedAt)
@@ -140,28 +197,33 @@ public class MonitorService extends Service {
         String placeName = Prefs.place(this);
         updateStatus(r.state, placeName, false);
         String th = AlertSource.titles(threats);
+        if (r.state == AlertSource.UNKNOWN) return;   // даних по району немає — нічого не озвучуємо
+        p.edit().putInt(Prefs.KNOWN_STATE, r.state).putString(Prefs.KNOWN_THREATS, join(threats)).putString(Prefs.KNOWN_LEVEL, r.level).apply();
 
         if (firstCheck) {
             firstCheck = false;
             return; // при запуску звук не граємо, лише показуємо статус
         }
+        Engine.Action act = Engine.decide(old, oldThreats, oldLevel, r);
+        List<String> added = act.added;
         boolean quiet = p.getBoolean(Prefs.NOTIFY_ONLY, false);   // «лише сповіщення»: без голосу і сирени
-        if (added.contains("ballistic_missiles")) {
+        if (act.kind != Engine.NONE) L("SOUND " + new String[]{"", "ballistic", "alarm", "escalation", "newthreats", "clear"}[act.kind] + (quiet ? " (лише сповіщення)" : ""));
+        if (act.kind == Engine.BALLISTIC) {
             if (!quiet) Sounds.ballistic(this, old != AlertSource.ALERT, threats);   // балістика — окремий терміновий сигнал
             showAlert(this, "БАЛІСТИКА!", placeName + ". Негайно в укриття!" + (th.length() > 0 ? "\n" + th : ""), PURPLE, quiet);
-        } else if (old != AlertSource.ALERT && r.state == AlertSource.ALERT) {
+        } else if (act.kind == Engine.ALARM) {
             if (!quiet) Sounds.alarm(this, threats);
             boolean y = r.level.equals("yellow");
             showAlert(this, y ? "ПОВІТРЯНА ТРИВОГА — жовтий рівень" : "ПОВІТРЯНА ТРИВОГА!",
                     placeName + ". Пройдіть в укриття!" + (th.length() > 0 ? "\n" + th : ""), y ? YELLOW : RED, quiet);
-        } else if (old == AlertSource.ALERT && r.state == AlertSource.ALERT && oldLevel.equals("yellow") && r.level.equals("red")) {
+        } else if (act.kind == Engine.ESCALATION) {
             // Рівень підвищено: жовтий → червоний — повна сирена
             if (!quiet) Sounds.alarm(this, threats);
             showAlert(this, "ЧЕРВОНИЙ РІВЕНЬ ТРИВОГИ!", placeName + ". Негайно в укриття!" + (th.length() > 0 ? "\n" + th : ""), RED, quiet);
-        } else if (old == AlertSource.ALERT && r.state == AlertSource.ALERT && !added.isEmpty()) {
+        } else if (act.kind == Engine.NEW_THREATS) {
             if (!quiet) Sounds.newThreats(this, added);
             showAlert(this, "Нова загроза", placeName + ": " + AlertSource.titles(added), r.level.equals("yellow") ? YELLOW : RED, quiet);
-        } else if (old == AlertSource.ALERT && r.state == AlertSource.CLEAR) {
+        } else if (act.kind == Engine.CLEAR) {
             if (!quiet) Sounds.clear(this);
             showAlert(this, "Відбій тривоги", placeName, GREEN, quiet);
         }
@@ -258,6 +320,7 @@ public class MonitorService extends Service {
 
     @Override
     public void onDestroy() {
+        ua.shutdown();
         if (handler != null) handler.removeCallbacksAndMessages(null);
         if (thread != null) thread.quit();
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();

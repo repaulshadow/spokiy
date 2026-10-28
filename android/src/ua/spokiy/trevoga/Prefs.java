@@ -15,6 +15,8 @@ final class Prefs {
     static final String REGION = "region", PARTIAL = "partial", ENABLED = "enabled",
             STATE = "state", STATUS_TIME = "status_time", ERROR = "error", SOURCE = "source",
             ASKED_BATTERY = "asked_battery";
+    // останній ВІДОМИЙ стан (для переходів: коротка втрата зв'язку не повторює сирену і не «з'їдає» відбій)
+    static final String KNOWN_STATE = "known_state", KNOWN_THREATS = "known_threats", KNOWN_LEVEL = "known_level";
 
     static final String CH_STATUS = "status_v2", CH_ALERT = "alert_v1";
 

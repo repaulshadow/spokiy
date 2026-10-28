@@ -107,6 +107,12 @@ class H(BaseHTTPRequestHandler):
         path = self.path.split("?")[0]
         W.requests[path] = W.requests.get(path, 0) + 1
         if W.server_down: return self.send(503, b"down", "text/plain")
+        if path == "/stream" and "websocket" in (self.headers.get("Upgrade") or "").lower():
+            # потік на тій самій адресі, що й сервер (як у справжнього сервера; так його бачить Android-версія)
+            if ua_down(): return self.send(503, b"down", "text/plain")
+            self.close_connection = True
+            ws_loop(self.connection, self.headers.get("Sec-WebSocket-Key"), ua_rest, ua_down)
+            return
         if path == "/status": return self.send(200, json.dumps(status()).encode())
         if path == "/api/v1/alerts": return self.send(200, json.dumps(neptun_rest()).encode())
         if path == "/version.json":
@@ -136,6 +142,16 @@ def ws_client(c, data_fn=None, is_down=None):
             if not x: return
             req += x
         key = re.search(rb"Sec-WebSocket-Key:\s*(\S+)", req, re.I).group(1).decode()
+        ws_loop(c, key, data_fn, is_down)
+    except Exception:
+        pass
+    finally:
+        try: c.close()
+        except Exception: pass
+
+def ws_loop(c, key, data_fn, is_down):
+    """Відповідь 101 і далі — розсилка змін і heartbeat, поки «джерело» не впаде."""
+    try:
         acc = base64.b64encode(hashlib.sha1((key + GUID).encode()).digest()).decode()
         c.sendall(("HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\nSec-WebSocket-Accept: " + acc + "\r\n\r\n").encode())
         sent_gen, last_hb = -1, 0

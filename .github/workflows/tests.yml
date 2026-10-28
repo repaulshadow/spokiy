@@ -95,6 +95,34 @@ jobs:
           grep -q "CONNECT neptun.in.ua:443" build/proxy.log || { echo "::error::потік NEPTUN пішов повз проксі"; exit 1; }
           grep -q "workers.dev:443" build/proxy.log || { echo "::error::запит до сервера пішов повз проксі"; exit 1; }
 
+  android:
+    name: Android — логіка, потік, емулятор
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v4
+        with: { distribution: temurin, java-version: "17" }
+      - name: org.json (справжня бібліотека; в android.jar — заглушки)
+        run: curl -sSL -o org-json.jar https://repo1.maven.org/maven2/org/json/json/20240303/json-20240303.jar
+      - name: Логіка і WebSocket-клієнт (звичайна Java)
+        run: JSON_JAR=$PWD/org-json.jar python3 test/run.py sh android/test/run_tests.sh stream
+      - name: Тестовий APK (сервер-імітація 10.0.2.2:8787)
+        run: SERVER_URL=http://10.0.2.2:8787 python3 test/run.py sh android/build_ci.sh $PWD/build/test.apk
+      - name: KVM для емулятора
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - name: Сценарій в емуляторі (Android 11)
+        uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: 30
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: python3 test/run.py python3 android/test/android_e2e.py build/test.apk
+
   soak:
     name: Довгий тест пам'яті (Windows)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.soak_minutes != '0' }}
