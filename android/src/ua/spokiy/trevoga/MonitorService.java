@@ -46,6 +46,7 @@ public class MonitorService extends Service {
     private GeoFilter geoFilter;
     private boolean locStarted, movedAuto;
     private String lastGeoReject = "";
+    private long lastGeoRejectAt = 0;
     private final StreamClient ua = new StreamClient("trevoga-ua", "");
 
     static void start(Context c) {
@@ -437,6 +438,7 @@ public class MonitorService extends Service {
         String time = new SimpleDateFormat("HH:mm", Locale.getDefault()).format(new Date());
         String src = f.gps ? "GPS" : "мережа";
         if (d.accepted) {
+            lastGeoReject = "";   // після прийнятої точки — знову пишемо про відкинуті
             GeoFilter.Fix a = geoFilter.lastAccepted();
             SharedPreferences.Editor e = p.edit().putString(Prefs.AUTO_FIX, a.lat + "," + a.lon + "," + a.acc + "," + a.time);
             if (d.place != null) {
@@ -451,10 +453,16 @@ public class MonitorService extends Service {
                 if (handler != null) { handler.removeCallbacks(loop); handler.post(loop); }
             }
         } else {
-            if (!d.reason.equals(lastGeoReject)) L("GEO відкинуто (" + src + "): " + d.reason);
-            lastGeoReject = d.reason;
-            String cur = geoFilter.current != null ? geoFilter.current.title() : "ще не визначено";
-            p.edit().putString(Prefs.AUTO_INFO, cur + " · " + time + " відкинуто точку: " + d.reason).apply();
+            // одна й та сама причина (без чисел) — у журнал не частіше разу на хвилину (GPS шле точку щосекунди)
+            String kind = d.reason.replaceAll("[0-9]+", "#");
+            long now = System.currentTimeMillis();
+            if (!kind.equals(lastGeoReject) || now - lastGeoRejectAt > 60000) {
+                L("GEO відкинуто (" + src + "): " + d.reason);
+                lastGeoReject = kind;
+                lastGeoRejectAt = now;
+                String cur = geoFilter.current != null ? geoFilter.current.title() : "ще не визначено";
+                p.edit().putString(Prefs.AUTO_INFO, cur + " · " + time + " відкинуто точку: " + d.reason).apply();
+            }
         }
     }
 
