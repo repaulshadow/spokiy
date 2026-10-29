@@ -15,7 +15,9 @@ jobs:
       - uses: actions/checkout@v5
       - run: python3 test/ua_probe.py
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         if: always()
         with:
+          retention-days: 3
           name: swagger
           path: swagger.json

@@ -23,6 +23,8 @@ jobs:
       - uses: actions/checkout@v5
       - run: python3 test/run.py python3 test/odesa_report.py
       - uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
+          retention-days: 3
           name: odesa-report
           path: odesa_report.md

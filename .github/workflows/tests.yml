@@ -67,7 +67,9 @@ jobs:
       - name: Журнал програми
         if: always()
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
+          retention-days: 3
           name: e2e-log
           path: build/e2e-trevoga.log
 
@@ -136,7 +138,9 @@ jobs:
       - run: python test/run.py python test/soak.py Trevoga.exe build/soak ${{ inputs.soak_minutes }}
       - if: always()
         uses: actions/upload-artifact@v4
+        continue-on-error: true
         with:
+          retention-days: 3
           name: soak
           path: |
             build/soak.csv
