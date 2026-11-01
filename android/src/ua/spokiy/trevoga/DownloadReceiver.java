@@ -21,7 +21,7 @@ public class DownloadReceiver extends BroadcastReceiver {
         Intent i = new Intent(c, MainActivity.class).setAction(ACTION_INSTALL)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         Notification n = Prefs.builder(c, Prefs.CH_ALERT)
-                .setSmallIcon(R.drawable.ic_launcher)
+                .setSmallIcon(R.drawable.ic_notif)
                 .setContentTitle("Оновлення завантажено")
                 .setContentText("Натисніть, щоб встановити нову версію «Тривоги»")
                 .setAutoCancel(true)

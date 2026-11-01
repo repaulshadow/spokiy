@@ -333,7 +333,7 @@ public class MonitorService extends Service {
     @SuppressWarnings("deprecation")
     private Notification statusNotification(String text) {
         Notification.Builder b = Prefs.builder(this, Prefs.CH_STATUS)
-                .setSmallIcon(R.drawable.ic_launcher)
+                .setSmallIcon(R.drawable.ic_notif)
                 .setContentTitle(lastStatusTitle)
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
@@ -364,7 +364,7 @@ public class MonitorService extends Service {
     private void postCard(String title, String text, int color, boolean quiet, boolean silentUpdate) {
         cardText = text;
         Notification.Builder b = Prefs.builder(this, Prefs.CH_ALERT)
-                .setSmallIcon(R.drawable.ic_launcher)
+                .setSmallIcon(R.drawable.ic_notif)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))
@@ -394,7 +394,7 @@ public class MonitorService extends Service {
     static void showSeparate(Context ctx, String title, String text, int color, boolean quiet) {
         Intent open = new Intent(ctx, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         Notification.Builder b = Prefs.builder(ctx, Prefs.CH_ALERT)
-                .setSmallIcon(R.drawable.ic_launcher)
+                .setSmallIcon(R.drawable.ic_notif)
                 .setContentTitle(title)
                 .setContentText(text)
                 .setStyle(new Notification.BigTextStyle().bigText(text))

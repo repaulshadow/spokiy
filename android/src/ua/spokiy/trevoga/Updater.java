@@ -79,7 +79,7 @@ final class Updater {
         Intent i = new Intent(c, MainActivity.class).setAction(ACTION_UPDATE)
                 .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         Notification.Builder b = Prefs.builder(c, Prefs.CH_ALERT)
-                .setSmallIcon(R.drawable.ic_launcher)
+                .setSmallIcon(R.drawable.ic_notif)
                 .setContentTitle("Доступна нова версія " + Prefs.get(c).getString(U_NAME, ""))
                 .setContentText("Натисніть, щоб оновити програму «Тривога»")
                 .setAutoCancel(true)

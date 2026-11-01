@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+    <!-- Material: акцентний колір (перемикачі, списки, діалоги). На Android 12+ — системні кольори (values-v31). -->
+    <color name="accent">#FFB3261E</color>
+    <style name="AppTheme" parent="@android:style/Theme.Material.Light.NoActionBar">
+        <item name="android:colorAccent">@color/accent</item>
+        <item name="android:colorPrimary">@color/accent</item>
+        <item name="android:colorPrimaryDark">#FFFFF8F7</item>
+        <item name="android:windowBackground">@color/bg</item>
+    </style>
+    <color name="bg">#FFFFF8F7</color>
+</resources>

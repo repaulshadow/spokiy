@@ -7,6 +7,7 @@ import android.content.DialogInterface;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.content.res.ColorStateList;
+import android.content.res.Configuration;
 import android.graphics.Color;
 import android.graphics.Typeface;
 import android.graphics.drawable.Drawable;
@@ -21,6 +22,8 @@ import android.view.Gravity;
 import android.view.View;
 import android.view.ViewGroup;
 import android.view.Window;
+import android.widget.ImageView;
+import android.widget.FrameLayout;
 import android.widget.AdapterView;
 import android.widget.ArrayAdapter;
 import android.widget.CompoundButton;
@@ -38,7 +41,11 @@ import java.util.Locale;
 
 public class MainActivity extends Activity implements SharedPreferences.OnSharedPreferenceChangeListener {
     // Кольори
-    static final int BG = 0xFFF3F4F6, TEXT = 0xFF111827, MUTED = 0xFF6B7280, LINE = 0xFFE5E7EB;
+    // Material 3: поверхні й текст (на Android 12+ — системні кольори з шпалер, див. initPalette)
+    static int BG = 0xFFFFF8F7, CARD = 0xFFFCEAE7, TEXT = 0xFF231918, MUTED = 0xFF534341, LINE = 0xFFD8C2BF;
+    static int PRIMARY = 0xFFB3261E, ON_PRIMARY = 0xFFFFFFFF, TONAL = 0xFFFFDAD6, ON_TONAL = 0xFF410002;
+    static boolean night;
+    static final int FILLED = 0, TONAL_BTN = 1, OUTLINED = 2;
     static final int RED = 0xFFDC2626, DARK_RED = 0xFF991B1B, GREEN = 0xFF16A34A, GRAY = 0xFF6B7280;
 
     private SharedPreferences prefs;
@@ -69,13 +76,14 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         super.onCreate(b);
         prefs = Prefs.get(this);
         Prefs.createChannels(this);
+        initPalette();
 
         ScrollView scroll = new ScrollView(this);
         scroll.setBackgroundColor(BG);
         scroll.setFillViewport(true);
         LinearLayout root = new LinearLayout(this);
         root.setOrientation(LinearLayout.VERTICAL);
-        root.setPadding(dp(16), dp(16), dp(16), dp(24));
+        root.setPadding(dp(16), dp(8), dp(16), dp(24));
         scroll.addView(root);
         this.scroll = scroll;
 
@@ -90,24 +98,28 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
 
         LinearLayout head = row();
         head.setGravity(Gravity.CENTER_VERTICAL);
-        TextView back = text("‹  Назад", 16, TEXT, true);
-        back.setPadding(dp(4), dp(10), dp(16), dp(10));
-        back.setClickable(true);
-        back.setOnClickListener(new View.OnClickListener() {
+        head.setMinimumHeight(dp(64));
+        View back = iconButton(R.drawable.ic_back, "Назад", new View.OnClickListener() {
             public void onClick(View v) { showSettings(false); }
         });
-        head.addView(back);
-        TextView st = text("Налаштування", 20, TEXT, true);
+        head.addView(back, new LinearLayout.LayoutParams(dp(48), dp(48)));
+        TextView st = text("Налаштування", 22, TEXT, false);
+        st.setPadding(dp(8), 0, 0, 0);
         head.addView(st);
         settings.addView(head);
+
+        TextView appTitle = text("Тривога", 22, TEXT, false);
+        appTitle.setGravity(Gravity.CENTER_VERTICAL);
+        appTitle.setMinHeight(dp(64));
+        appTitle.setPadding(dp(4), 0, 0, 0);
+        home.addView(appTitle);
 
         // ---------- картка статусу ----------
         statusCard = new LinearLayout(this);
         statusCard.setOrientation(LinearLayout.VERTICAL);
-        statusCard.setPadding(dp(22), dp(22), dp(22), dp(22));
-        statusCard.setMinimumHeight(dp(190));
-        statusCard.setElevation(dp(3));
-        title = text("", 28, Color.WHITE, true);
+        statusCard.setPadding(dp(24), dp(24), dp(24), dp(24));
+        statusCard.setMinimumHeight(dp(200));
+        title = text("", 30, Color.WHITE, true);
         place = text("", 16, 0xE6FFFFFF, false);
         place.setPadding(0, dp(6), 0, 0);
         detail = text("", 14, 0xD9FFFFFF, false);
@@ -163,7 +175,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             }
             public void onNothingSelected(AdapterView<?> p) { }
         });
-        where.addView(spinner);
+        where.addView(field(spinner), matchWrap(dp(4)));
         where.addView(fieldLabel("Район"));
         raionSpinner = new Spinner(this);
         raionSpinner.setOnItemSelectedListener(new AdapterView.OnItemSelectedListener() {
@@ -177,7 +189,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             }
             public void onNothingSelected(AdapterView<?> p) { }
         });
-        where.addView(raionSpinner);
+        where.addView(field(raionSpinner), matchWrap(dp(4)));
         fillRaions();
         Switch partial = new Switch(this);
         partial.setText("Сповіщати й про тривогу в окремих громадах");
@@ -241,16 +253,17 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             }
             public void onNothingSelected(AdapterView<?> p) { }
         });
-        notif.addView(voice);
-        final View[] soundViews = {voiceLabel, voice};
+        View voiceBox = field(voice);
+        notif.addView(voiceBox, matchWrap(dp(4)));
+        final View[] soundViews = {voiceLabel, voice, voiceBox};
         quiet.setOnCheckedChangeListener(new CompoundButton.OnCheckedChangeListener() {
             public void onCheckedChanged(CompoundButton c, boolean v) {
                 prefs.edit().putBoolean(Prefs.NOTIFY_ONLY, v).apply();
                 if (v) Sounds.stop();
-                for (View x : soundViews) { x.setEnabled(!v); x.setAlpha(v ? 0.4f : 1f); }
+                for (View x : soundViews) { x.setEnabled(!v); x.setAlpha(v ? 0.6f : 1f); }
             }
         });
-        for (View x : soundViews) { x.setEnabled(!quiet.isChecked()); x.setAlpha(quiet.isChecked() ? 0.4f : 1f); }
+        for (View x : soundViews) { x.setEnabled(!quiet.isChecked()); x.setAlpha(quiet.isChecked() ? 0.6f : 1f); }
 
         notif.addView(fieldLabel("Свої звуки"));
         LinearLayout row2 = row();
@@ -271,14 +284,14 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         soundInfo.setPadding(0, dp(6), 0, 0);
         notif.addView(soundInfo);
 
-        View batt = button("Дозволити роботу у фоні", false, new View.OnClickListener() {
+        View batt = button("Дозволити роботу у фоні", 0, OUTLINED, new View.OnClickListener() {
             public void onClick(View v) { askBattery(true); }
         });
         LinearLayout.LayoutParams bl = matchWrap(dp(12));
         notif.addView(batt, bl);
         if (Build.VERSION.SDK_INT >= 26) {
             // Android вимагає постійне сповіщення для роботи у фоні; його можна сховати в налаштуваннях каналу
-            View hide = button("Сховати постійне сповіщення", false, new View.OnClickListener() {
+            View hide = button("Сховати постійне сповіщення", 0, OUTLINED, new View.OnClickListener() {
                 public void onClick(View v) {
                     try {
                         startActivity(new Intent("android.settings.CHANNEL_NOTIFICATION_SETTINGS")
@@ -321,22 +334,21 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         versionInfo = text("", 14, TEXT, false);
         versionInfo.setPadding(0, dp(8), 0, dp(4));
         upd.addView(versionInfo);
-        upd.addView(button("Перевірити оновлення", false, new View.OnClickListener() {
+        upd.addView(button("Перевірити оновлення", 0, OUTLINED, new View.OnClickListener() {
             public void onClick(View v) { checkUpdateNow(); }
         }), matchWrap(dp(8)));
         settings.addView(upd, matchWrap(dp(12)));
 
-        TextView testsLabel = fieldLabel("ПЕРЕВІРКА ЗВУКУ І СПОВІЩЕНЬ");
-        testsLabel.setPadding(dp(4), dp(18), 0, dp(6));
-        settings.addView(testsLabel);
-        settings.addView(row, matchWrap(0));
+        LinearLayout tests = card("Перевірка звуку і сповіщень");
+        tests.addView(row, matchWrap(dp(10)));
+        settings.addView(tests, matchWrap(dp(12)));
 
         // ---------- головний екран: кнопки ----------
         LinearLayout homeRow = row();
-        homeRow.addView(button("⚙  Налаштування і тести", false, new View.OnClickListener() {
+        homeRow.addView(button("Налаштування", R.drawable.ic_settings, TONAL_BTN, new View.OnClickListener() {
             public void onClick(View v) { showSettings(true); }
         }), new LinearLayout.LayoutParams(0, dp(52), 2f));
-        View hush = button("Тиша", true, new View.OnClickListener() {
+        View hush = button("Тиша", R.drawable.ic_volume_off, FILLED, new View.OnClickListener() {
             public void onClick(View v) { Sounds.stop(); }
         });
         LinearLayout.LayoutParams hl = new LinearLayout.LayoutParams(0, dp(52), 1f);
@@ -353,7 +365,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         credit.setPadding(dp(4), dp(10), dp(4), 0);
         credit.setText(android.text.Html.fromHtml("Дані: alerts.in.ua · <a href=\"https://neptun.in.ua/\">Карта повітряних тривог — NEPTUN</a>"));
         credit.setMovementMethod(android.text.method.LinkMovementMethod.getInstance());
-        credit.setLinkTextColor(TEXT);
+        credit.setLinkTextColor(PRIMARY);
         home.addView(credit);
 
         setContentView(scroll);
@@ -384,21 +396,85 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         return t;
     }
 
+    /** Material 3 «filled card»: тонований фон поверхні, великі заокруглення, без рамки й тіні. */
     private LinearLayout card(String caption) {
         LinearLayout c = new LinearLayout(this);
         c.setOrientation(LinearLayout.VERTICAL);
-        c.setPadding(dp(16), dp(14), dp(16), dp(16));
+        c.setPadding(dp(16), dp(16), dp(16), dp(16));
         GradientDrawable bg = new GradientDrawable();
-        bg.setColor(Color.WHITE);
-        bg.setCornerRadius(dp(16));
-        bg.setStroke(dp(1), LINE);
+        bg.setColor(CARD);
+        bg.setCornerRadius(dp(20));
         c.setBackground(bg);
         if (caption != null) {
-            TextView t = text(caption.toUpperCase(Locale.getDefault()), 12, MUTED, true);
-            t.setLetterSpacing(0.08f);
+            TextView t = text(caption, 14, PRIMARY, true);
+            t.setLetterSpacing(0.01f);
             c.addView(t);
         }
         return c;
+    }
+
+    /** Список у рамці (Material «outlined field»). */
+    private View field(Spinner sp) {
+        FrameLayout f = new FrameLayout(this);
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(8));
+        g.setStroke(dp(1), MUTED);
+        f.setBackground(g);
+        f.setPadding(dp(4), dp(2), dp(4), dp(2));
+        f.addView(sp, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(48)));
+        return f;
+    }
+
+    private View iconButton(int icon, String desc, View.OnClickListener l) {
+        ImageView iv = new ImageView(this);
+        iv.setImageResource(icon);
+        if (Build.VERSION.SDK_INT >= 21) iv.setImageTintList(ColorStateList.valueOf(TEXT));
+        iv.setScaleType(ImageView.ScaleType.CENTER);
+        iv.setContentDescription(desc);
+        GradientDrawable mask = new GradientDrawable();
+        mask.setShape(GradientDrawable.OVAL);
+        mask.setColor(Color.WHITE);
+        iv.setBackground(new RippleDrawable(ColorStateList.valueOf((TEXT & 0x00FFFFFF) | 0x26000000), null, mask));
+        iv.setClickable(true);
+        iv.setOnClickListener(l);
+        return iv;
+    }
+
+    private void initPalette() {
+        night = (getResources().getConfiguration().uiMode & Configuration.UI_MODE_NIGHT_MASK) == Configuration.UI_MODE_NIGHT_YES;
+        if (night) {
+            BG = 0xFF1A1110; CARD = 0xFF2A201F; TEXT = 0xFFF1DEDC; MUTED = 0xFFD8C2BF; LINE = 0xFF534341;
+            PRIMARY = 0xFFFFB4AB; ON_PRIMARY = 0xFF690005; TONAL = 0xFF5D3F3B; ON_TONAL = 0xFFFFDAD6;
+        } else {
+            BG = 0xFFFFF8F7; CARD = 0xFFFCEAE7; TEXT = 0xFF231918; MUTED = 0xFF534341; LINE = 0xFFD8C2BF;
+            PRIMARY = 0xFFB3261E; ON_PRIMARY = 0xFFFFFFFF; TONAL = 0xFFFFDAD6; ON_TONAL = 0xFF410002;
+        }
+        if (Build.VERSION.SDK_INT >= 31) {   // Material You: кольори системи (з шпалер)
+            PRIMARY = sys(night ? "system_accent1_200" : "system_accent1_600", PRIMARY);
+            ON_PRIMARY = sys(night ? "system_accent1_800" : "system_accent1_0", ON_PRIMARY);
+            TONAL = sys(night ? "system_accent2_700" : "system_accent2_100", TONAL);
+            ON_TONAL = sys(night ? "system_accent2_100" : "system_accent2_900", ON_TONAL);
+            BG = sys(night ? "system_neutral1_900" : "system_neutral1_10", BG);
+            CARD = sys(night ? "system_neutral1_800" : "system_neutral1_50", CARD);
+            TEXT = sys(night ? "system_neutral1_100" : "system_neutral1_900", TEXT);
+            MUTED = sys(night ? "system_neutral2_200" : "system_neutral2_700", MUTED);
+            LINE = sys(night ? "system_neutral2_700" : "system_neutral2_200", LINE);
+        }
+        Window w = getWindow();
+        w.setStatusBarColor(BG);
+        w.setNavigationBarColor(BG);
+        int flags = 0;
+        if (!night && Build.VERSION.SDK_INT >= 23) flags |= 0x00002000;   // SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
+        if (!night && Build.VERSION.SDK_INT >= 27) flags |= 0x00000010;   // SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
+        w.getDecorView().setSystemUiVisibility(flags);
+    }
+
+    @SuppressWarnings("deprecation")
+    private int sys(String name, int def) {
+        try {
+            int id = getResources().getIdentifier(name, "color", "android");
+            return id == 0 ? def : getResources().getColor(id);
+        } catch (Exception e) { return def; }
     }
 
     private LinearLayout row() {
@@ -421,17 +497,41 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     }
 
     private View button(String s, boolean dark, View.OnClickListener l) {
-        TextView btn = text(s, 14, dark ? Color.WHITE : TEXT, true);
+        return button(s, 0, dark ? FILLED : TONAL_BTN, l);
+    }
+
+    /** Кнопка Material 3: FILLED (основна дія), TONAL_BTN (другорядна), OUTLINED (рідкісна). Форма — «пігулка». */
+    private View button(String s, int icon, int kind, View.OnClickListener l) {
+        int fg = kind == FILLED ? ON_PRIMARY : kind == TONAL_BTN ? ON_TONAL : PRIMARY;
+        LinearLayout btn = new LinearLayout(this);
+        btn.setOrientation(LinearLayout.HORIZONTAL);
         btn.setGravity(Gravity.CENTER);
-        btn.setPadding(dp(8), dp(12), dp(8), dp(12));
-        btn.setMinHeight(dp(48));
+        btn.setPadding(dp(12), dp(10), dp(12), dp(10));
+        btn.setMinimumHeight(dp(48));
+        if (icon != 0) {
+            ImageView iv = new ImageView(this);
+            iv.setImageResource(icon);
+            iv.setImageTintList(ColorStateList.valueOf(fg));
+            LinearLayout.LayoutParams ip = new LinearLayout.LayoutParams(dp(18), dp(18));
+            ip.rightMargin = dp(8);
+            btn.addView(iv, ip);
+        }
+        TextView t = text(s, 14, fg, true);
+        t.setGravity(Gravity.CENTER);
+        t.setSingleLine(false);
+        btn.addView(t);
         GradientDrawable shape = new GradientDrawable();
-        shape.setColor(dark ? TEXT : Color.WHITE);
-        shape.setCornerRadius(dp(12));
-        if (!dark) shape.setStroke(dp(1), LINE);
-        Drawable bg = new RippleDrawable(ColorStateList.valueOf(dark ? 0x40FFFFFF : 0x22000000), shape, null);
+        shape.setCornerRadius(dp(24));
+        shape.setColor(kind == FILLED ? PRIMARY : kind == TONAL_BTN ? TONAL : Color.TRANSPARENT);
+        if (kind == OUTLINED) shape.setStroke(dp(1), MUTED);
+        GradientDrawable mask = new GradientDrawable();
+        mask.setCornerRadius(dp(24));
+        mask.setColor(Color.WHITE);
+        Drawable bg = new RippleDrawable(ColorStateList.valueOf((fg & 0x00FFFFFF) | 0x33000000), shape, mask);
         btn.setBackground(bg);
         btn.setClickable(true);
+        btn.setFocusable(true);
+        btn.setContentDescription(s);
         btn.setOnClickListener(l);
         return btn;
     }
@@ -441,20 +541,16 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         t.setPadding(dp(12), dp(6), dp(12), dp(6));
         GradientDrawable g = new GradientDrawable();
         g.setColor(hot ? Color.WHITE : 0x38FFFFFF);
-        g.setCornerRadius(dp(16));
+        g.setCornerRadius(dp(8));
         t.setBackground(g);
         return t;
     }
 
     private void paintCard(int color) {
         GradientDrawable g = new GradientDrawable(GradientDrawable.Orientation.TL_BR,
-                new int[]{lighten(color, 0.08f), darken(color, 0.18f)});
-        g.setCornerRadius(dp(24));
+                new int[]{color, darken(color, 0.12f)});
+        g.setCornerRadius(dp(28));
         statusCard.setBackground(g);
-        if (Build.VERSION.SDK_INT >= 21) {
-            Window w = getWindow();
-            w.setStatusBarColor(darken(color, 0.25f));
-        }
     }
 
     private static int lighten(int c, float k) {
