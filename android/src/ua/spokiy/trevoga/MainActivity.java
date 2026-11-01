@@ -764,6 +764,8 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         boolean active = Prefs.autoActive(this);
         regionSpinner.setEnabled(!auto);
         raionSpinner.setEnabled(!auto);
+        for (View sp : new View[]{regionSpinner, raionSpinner})
+            if (sp.getParent() instanceof View) ((View) sp.getParent()).setAlpha(auto ? 0.6f : 1f);
         if (active) {
             int i = AlertSource.indexOf(Prefs.region(this));
             if (i >= 0 && regionSpinner.getSelectedItemPosition() != i) { regionSpinner.setSelection(i); fillRaions(); }

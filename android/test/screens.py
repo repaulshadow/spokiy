@@ -31,7 +31,19 @@ def tap_desc(desc):
     if not m: print("::warning::не знайдено", desc, flush=True); return
     a = list(map(int, m.groups()))
     adb("shell", "input", "tap", str((a[0] + a[2]) // 2), str((a[1] + a[3]) // 2))
-def swipe_up(): adb("shell", "input", "swipe", "540", "1700", "540", "500", "400")
+def size():
+    m = re.search(r"(\d+)x(\d+)", adb("shell", "wm", "size"))
+    return (int(m.group(1)), int(m.group(2))) if m else (320, 640)
+def swipe_up():
+    w, h = size()
+    adb("shell", "input", "swipe", str(w // 2), str(h * 8 // 10), str(w // 2), str(h * 3 // 10), "500")
+def tap_text(t):
+    adb("shell", "uiautomator", "dump", "/sdcard/u.xml")
+    x = adb("shell", "cat", "/sdcard/u.xml")
+    m = re.search(r'text="' + re.escape(t) + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', x)
+    if m:
+        a = list(map(int, m.groups()))
+        adb("shell", "input", "tap", str((a[0] + a[2]) // 2), str((a[1] + a[3]) // 2))
 
 threading.Thread(target=ThreadingHTTPServer(("127.0.0.1", e2e.HTTP_PORT), e2e.H).serve_forever, daemon=True).start()
 adb("install", "-r", "-g", APK)
@@ -40,10 +52,12 @@ adb("shell", "settings", "put", "global", "heads_up_notifications_enabled", "0")
 adb("logcat", "-c")
 adb("shell", "am", "start", "-n", PKG + "/.MainActivity")
 log_has(r"STATE Clear", 90)
+time.sleep(2); tap_text("OK")   # Android 14: попередження про старий targetSdk
 shot("01_home")
 tap_desc("Налаштування"); shot("02_settings_1")
 swipe_up(); shot("03_settings_2")
 swipe_up(); shot("04_settings_3")
+swipe_up(); shot("04_settings_4")
 adb("shell", "input", "keyevent", "KEYCODE_BACK")
 adb("logcat", "-c")
 change(lambda: W.ua_o.__setitem__(e2e.ON[e2e.ON.index("м. Київ")], "red"))
