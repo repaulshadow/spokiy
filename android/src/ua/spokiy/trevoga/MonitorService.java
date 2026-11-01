@@ -41,6 +41,13 @@ public class MonitorService extends Service {
     private String lastPlace = null;
     private boolean firstCheck = true;
     private final Engine engine = new Engine();
+    static volatile MonitorService instance;
+    // Картка тривоги/відбою — це саме постійне сповіщення служби (лише його Android дозволяє зафарбувати),
+    // тож окремого другого сповіщення немає
+    private String cardTitle, cardText;
+    private int cardColor;
+    private boolean cardQuiet;
+    private long cardUntil;     // до коли показувати картку відбою (мс); під час тривоги — поки триває
     // автовизначення району
     private GeoLookup geo;
     private GeoFilter geoFilter;
@@ -61,6 +68,7 @@ public class MonitorService extends Service {
     public void onCreate() {
         super.onCreate();
         Prefs.createChannels(this);
+        instance = this;
         // збірка для автотестів: автовизначення району ввімкнене одразу
         org.json.JSONObject cfg = AlertSource.embeddedConfig(this);
         if (cfg.optBoolean("fixed", false) && cfg.optBoolean("auto_place", false) && !Prefs.get(this).contains(Prefs.AUTO_PLACE))
@@ -97,6 +105,7 @@ public class MonitorService extends Service {
         if (intent != null && ACTION_STOP_SOUND.equals(intent.getAction())) {
             Sounds.stop();
             ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).cancel(NOTIF_ALERT);
+            if (cardTitle != null) { cardQuiet = true; postCard(cardTitle, cardText, cardColor, true, true); }   // картка лишається, без кнопки
         } else if (intent != null && ACTION_CHECK.equals(intent.getAction()) && handler != null) {
             handler.removeCallbacks(loop);
             handler.post(loop);
@@ -279,6 +288,15 @@ public class MonitorService extends Service {
 
     private void updateStatus(int state, String region, boolean error) {
         String th = AlertSource.titles(parseList(Prefs.get(this).getString(Prefs.THREATS, "")));
+        if (cardTitle != null) {
+            if (state == AlertSource.ALERT && cardUntil == Long.MAX_VALUE) {
+                // тривога триває — оновлюємо текст картки без повторного звуку
+                postCard(cardTitle, region + (th.length() > 0 ? " · " + th : "") + (error ? " (немає зв'язку)" : ""), cardColor, true, true);
+                return;
+            }
+            if (System.currentTimeMillis() < cardUntil) return;   // картку відбою ще показуємо
+            cardTitle = null;
+        }
         String text = state == AlertSource.ALERT ? "ТРИВОГА — " + region + (th.length() > 0 ? " · " + th : "")
                 : state == AlertSource.CLEAR ? "Тривоги немає — " + region
                 : "Немає даних — " + region;
@@ -327,8 +345,53 @@ public class MonitorService extends Service {
         return b.build();
     }
 
-    @SuppressWarnings("deprecation")
+    /** Тривога / відбій: одне сповіщення — постійне сповіщення служби стає карткою (зафарбованою, спливає, зі звуком). */
     static void showAlert(Context ctx, String title, String text, int color, boolean quiet) {
+        MonitorService s = instance;
+        if (s == null) { showSeparate(ctx, title, text, color, quiet); return; }   // служба не працює (стеження вимкнене)
+        boolean alert = color != GREEN;
+        boolean test = title.contains("(тест)");
+        s.cardTitle = title;
+        s.cardColor = color;
+        s.cardQuiet = quiet;
+        s.cardUntil = test ? System.currentTimeMillis() + 60000L : alert ? Long.MAX_VALUE : System.currentTimeMillis() + 10 * 60000L;
+        s.postCard(title, text, color, quiet, false);
+        ((NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE)).cancel(NOTIF_ALERT);
+        if (quiet) vibrate(ctx);
+    }
+
+    @SuppressWarnings("deprecation")
+    private void postCard(String title, String text, int color, boolean quiet, boolean silentUpdate) {
+        cardText = text;
+        Notification.Builder b = Prefs.builder(this, Prefs.CH_ALERT)
+                .setSmallIcon(R.drawable.ic_launcher)
+                .setContentTitle(title)
+                .setContentText(text)
+                .setStyle(new Notification.BigTextStyle().bigText(text))
+                .setOngoing(true)
+                .setOnlyAlertOnce(silentUpdate)
+                .setPriority(Notification.PRIORITY_MAX)
+                .setCategory(Notification.CATEGORY_ALARM)
+                .setContentIntent(openApp());
+        colorize(b, color);
+        if (!quiet && color != GREEN) {
+            PendingIntent stop = PendingIntent.getService(this, 1,
+                    new Intent(this, MonitorService.class).setAction(ACTION_STOP_SOUND), PendingIntent.FLAG_UPDATE_CURRENT);
+            b.addAction(0, "Вимкнути звук", stop);
+        }
+        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(NOTIF_STATUS, b.build());
+    }
+
+    private static void vibrate(Context ctx) {
+        // без звуку, лише коротка вібрація, щоб сповіщення помітили
+        try {
+            android.os.Vibrator v = (android.os.Vibrator) ctx.getSystemService(VIBRATOR_SERVICE);
+            if (v != null) v.vibrate(new long[]{0, 250, 150, 250}, -1);
+        } catch (Exception ignored) { }
+    }
+
+    @SuppressWarnings("deprecation")
+    static void showSeparate(Context ctx, String title, String text, int color, boolean quiet) {
         Intent open = new Intent(ctx, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
         Notification.Builder b = Prefs.builder(ctx, Prefs.CH_ALERT)
                 .setSmallIcon(R.drawable.ic_launcher)
@@ -470,6 +533,7 @@ public class MonitorService extends Service {
     public void onDestroy() {
         if (locStarted) stopLocation();
         ua.shutdown();
+        instance = null;
         if (handler != null) handler.removeCallbacksAndMessages(null);
         if (thread != null) thread.quit();
         if (wakeLock != null && wakeLock.isHeld()) wakeLock.release();

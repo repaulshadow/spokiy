@@ -48,6 +48,17 @@ def logcat_reader():
         if "Trevoga" in line or "FATAL" in line: print("logcat:", line, flush=True)
 
 def mark(): return len(LOG)
+
+def notifs():
+    """Активні сповіщення програми: [(id, заголовок)]."""
+    out = adb("shell", "dumpsys", "notification", "--noredact")
+    res = []
+    for blk in out.split("NotificationRecord(")[1:]:
+        if "pkg=" + PKG not in blk.split("\n")[0]: continue
+        mid = re.search(r"\bid=(\d+)", blk.split("\n")[0])
+        t = re.search(r"android\.title=String \((.*?)\)", blk)
+        res.append((mid.group(1) if mid else "?", t.group(1) if t else "?"))
+    return res
 def wait(pattern, timeout, after):
     rx = re.compile(pattern); end = time.time() + timeout
     while time.time() < end:
@@ -86,6 +97,9 @@ def main():
     m = mark(); t = change(lambda: W.ua_o.__setitem__(KYIV, "red"))
     expect("Тривога з UkraineAlarm — швидкість", r"STATE Alert.*UkraineAlarm наживо", 15, m, t, max_latency=2.0)
     expect("Сирена", r"SOUND alarm", 5, m)
+    time.sleep(2)
+    ns = notifs()
+    step("Під час тривоги — одне сповіщення, і це тривога", len(ns) == 1 and "ТРИВОГА" in ns[0][1].upper(), str(ns))
     # 2. NEPTUN і alerts.in.ua теж показують (через опитування), потім офіційний відбій — одразу
     m = mark()
     change(lambda: (W.nep_o.__setitem__(KYIV, ("red", ["Ракетна загроза"])), W.ain.__setitem__(KYIV_UID, (None, "red", ["unspecified_missiles"], e2e.NOW))))
@@ -94,6 +108,9 @@ def main():
     m = mark(); t = change(lambda: W.ua_o.pop(KYIV))
     expect("Офіційний відбій — одразу, не чекаючи NEPTUN", r"STATE Clear.*відбій за UkraineAlarm", 15, m, t, max_latency=2.0)
     expect("Звук відбою", r"SOUND clear", 5, m)
+    time.sleep(2)
+    ns = notifs()
+    step("Після відбою — одне сповіщення «Відбій»", len(ns) == 1 and "Відбій" in ns[0][1], str(ns))
     expect_none("Запізнілі NEPTUN і alerts.in.ua не вмикають тривогу знову", r"STATE Alert|SOUND alarm", 25, m)
     change(lambda: (W.nep_o.clear(), W.ain.clear()))
     time.sleep(12)
