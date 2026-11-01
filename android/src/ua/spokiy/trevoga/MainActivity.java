@@ -267,10 +267,10 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
 
         notif.addView(fieldLabel("Свої звуки"));
         LinearLayout row2 = row();
-        row2.addView(button("Сирена…", false, new View.OnClickListener() {
+        row2.addView(button("Сирена", false, new View.OnClickListener() {
             public void onClick(View v) { pickSound(PICK_ALARM); }
         }), weight(0));
-        row2.addView(button("Відбій…", false, new View.OnClickListener() {
+        row2.addView(button("Відбій", false, new View.OnClickListener() {
             public void onClick(View v) { pickSound(PICK_CLEAR); }
         }), weight(dp(8)));
         row2.addView(button("Скинути", false, new View.OnClickListener() {
