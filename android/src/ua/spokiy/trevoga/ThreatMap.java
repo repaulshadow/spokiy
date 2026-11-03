@@ -221,6 +221,12 @@ public class ThreatMap extends View {
     }
 
     @Override
+    protected void onMeasure(int ws, int hs) {
+        int w = MeasureSpec.getSize(ws);
+        setMeasuredDimension(w, (int) (w * 0.72f));   // пропорції України
+    }
+
+    @Override
     protected void onSizeChanged(int w, int h, int ow, int oh) {
         RectF src = new RectF(MINX, MINY, MAXX, MAXY), dst = new RectF(6 * density, 6 * density, w - 6 * density, h - 6 * density);
         base.setRectToRect(src, dst, Matrix.ScaleToFit.CENTER);

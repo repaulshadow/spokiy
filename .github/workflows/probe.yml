@@ -1,9 +1,0 @@
-name: Probe target data
-on: workflow_dispatch
-jobs:
-  probe:
-    runs-on: ubuntu-latest
-    steps:
-      - uses: actions/checkout@v5
-      - run: python3 tools/probe_targets.py
-        env: { UA: "${{ secrets.UKRAINEALARM_TOKEN }}" }

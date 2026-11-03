@@ -875,8 +875,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         mapCard.setPadding(dp(8), dp(8), dp(8), dp(12));
         map = new ThreatMap(this);
         map.setColors(night ? 0xFF3A2E2D : 0xFFFFFFFF, night ? 0xFF8C7A78 : 0xFFA08C8A, TEXT, PRIMARY, CARD);
-        int h = (int) (getResources().getDisplayMetrics().heightPixels * 0.5f);
-        mapCard.addView(map, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(dp(280), h)));
+        mapCard.addView(map, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
         map.setOnSelect(new ThreatMap.OnSelect() {
             public void selected(ThreatMap.Threat t) { showThreat(t); }
         });
