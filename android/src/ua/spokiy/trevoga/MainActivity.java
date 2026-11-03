@@ -49,6 +49,15 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     static final int RED = 0xFFDC2626, DARK_RED = 0xFF991B1B, GREEN = 0xFF16A34A, GRAY = 0xFF6B7280;
 
     private SharedPreferences prefs;
+    private LinearLayout mapCard;
+    private ThreatMap map;
+    private TextView mapInfo, mapSummary;
+    private FlowLayout legend;
+    private final List<TextView> segs = new ArrayList<TextView>();
+    private static GeoLookup geoCache;
+    private volatile boolean mapLoading;
+    private long mapAt;
+    private String mapErr;
     private LinearLayout home, settings;
     private ScrollView scroll;
     private LinearLayout statusCard;
@@ -108,11 +117,14 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         head.addView(st);
         settings.addView(head);
 
+        LinearLayout top = row();
+        top.setGravity(Gravity.CENTER_VERTICAL);
+        top.setMinimumHeight(dp(64));
         TextView appTitle = text("Тривога", 22, TEXT, false);
-        appTitle.setGravity(Gravity.CENTER_VERTICAL);
-        appTitle.setMinHeight(dp(64));
         appTitle.setPadding(dp(4), 0, 0, 0);
-        home.addView(appTitle);
+        top.addView(appTitle, new LinearLayout.LayoutParams(0, ViewGroup.LayoutParams.WRAP_CONTENT, 1f));
+        top.addView(segmented(new String[]{"Простий", "Карта"}, prefs.getBoolean(Prefs.MAP_VIEW, false) ? 1 : 0));
+        home.addView(top);
 
         // ---------- картка статусу ----------
         statusCard = new LinearLayout(this);
@@ -131,6 +143,8 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         statusCard.addView(detail);
         statusCard.addView(chips);
         home.addView(statusCard, matchWrap(0));
+        buildMapCard();
+        home.addView(mapCard, matchWrap(dp(12)));
 
         // ---------- стеження ----------
         LinearLayout watch = card(null);
@@ -369,6 +383,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         home.addView(credit);
 
         setContentView(scroll);
+        applyMode();
         handleIntent(getIntent());
 
         if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.start(this);
@@ -788,6 +803,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         updateVersionInfo();
         prefs.registerOnSharedPreferenceChangeListener(this);
         ticker.post(tick);
+        ticker.post(mapTick);
     }
 
     @Override
@@ -796,11 +812,205 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         try { unregisterReceiver(dlDone); } catch (Exception ignored) { }
         prefs.unregisterOnSharedPreferenceChangeListener(this);
         ticker.removeCallbacks(tick);
+        ticker.removeCallbacks(mapTick);
         super.onPause();
     }
 
     public void onSharedPreferenceChanged(SharedPreferences p, String key) {
         runOnUiThread(new Runnable() { public void run() { refresh(); } });
+    }
+
+    // ---------- карта цілей ----------
+
+    /** Перемикач «Простий / Карта» (Material segmented button). */
+    private View segmented(final String[] labels, int sel) {
+        LinearLayout box = row();
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(20));
+        g.setStroke(dp(1), MUTED);
+        box.setBackground(g);
+        box.setPadding(dp(1), dp(1), dp(1), dp(1));
+        segs.clear();
+        for (int i = 0; i < labels.length; i++) {
+            final int idx = i;
+            TextView t = text(labels[i], 14, TEXT, true);
+            t.setGravity(Gravity.CENTER);
+            t.setPadding(dp(14), 0, dp(14), 0);
+            t.setMinHeight(dp(38));
+            t.setContentDescription(labels[i]);
+            t.setClickable(true);
+            t.setOnClickListener(new View.OnClickListener() {
+                public void onClick(View v) {
+                    prefs.edit().putBoolean(Prefs.MAP_VIEW, idx == 1).apply();
+                    applyMode();
+                }
+            });
+            segs.add(t);
+            box.addView(t, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, dp(38)));
+        }
+        return box;
+    }
+
+    private void applyMode() {
+        boolean on = prefs.getBoolean(Prefs.MAP_VIEW, false);
+        for (int i = 0; i < segs.size(); i++) {
+            boolean s = (i == 1) == on;
+            TextView t = segs.get(i);
+            GradientDrawable g = new GradientDrawable();
+            float r = dp(19);
+            g.setCornerRadii(i == 0 ? new float[]{r, r, 0, 0, 0, 0, r, r} : new float[]{0, 0, r, r, r, r, 0, 0});
+            g.setColor(s ? TONAL : Color.TRANSPARENT);
+            t.setBackground(g);
+            t.setTextColor(s ? ON_TONAL : TEXT);
+            t.setText((s ? "✓ " : "") + (i == 0 ? "Простий" : "Карта"));
+        }
+        mapCard.setVisibility(on ? View.VISIBLE : View.GONE);
+        statusCard.setMinimumHeight(on ? 0 : dp(200));
+        title.setTextSize(on ? 24 : 30);
+        if (on) { loadGeo(); ticker.removeCallbacks(mapTick); ticker.post(mapTick); }
+    }
+
+    private void buildMapCard() {
+        mapCard = card(null);
+        mapCard.setPadding(dp(8), dp(8), dp(8), dp(12));
+        map = new ThreatMap(this);
+        map.setColors(night ? 0xFF3A2E2D : 0xFFFFFFFF, night ? 0xFF8C7A78 : 0xFFA08C8A, TEXT, PRIMARY, CARD);
+        int h = (int) (getResources().getDisplayMetrics().heightPixels * 0.5f);
+        mapCard.addView(map, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, Math.max(dp(280), h)));
+        map.setOnSelect(new ThreatMap.OnSelect() {
+            public void selected(ThreatMap.Threat t) { showThreat(t); }
+        });
+        mapInfo = text("Торкніться значка — подробиці. Двома пальцями — масштаб.", 13, TEXT, false);
+        mapInfo.setPadding(dp(8), dp(10), dp(8), 0);
+        mapCard.addView(mapInfo);
+        legend = new FlowLayout(this, dp(6));
+        legend.setPadding(dp(8), dp(8), dp(8), 0);
+        mapCard.addView(legend);
+        mapSummary = text("", 12, MUTED, false);
+        mapSummary.setPadding(dp(8), dp(8), dp(8), 0);
+        mapCard.addView(mapSummary);
+        TextView warn = text("Положення цілей приблизні й можуть запізнюватися; частина цілей може не з'явитися. "
+                + "Порожня карта не означає, що небезпеки немає — орієнтуйтеся на тривогу. Дані про цілі: NEPTUN.", 12, MUTED, false);
+        warn.setPadding(dp(8), dp(6), dp(8), 0);
+        mapCard.addView(warn);
+    }
+
+    private TextView legendChip(int color, String s) {
+        TextView t = text("●  " + s, 12, TEXT, false);
+        android.text.SpannableString sp = new android.text.SpannableString(t.getText());
+        sp.setSpan(new android.text.style.ForegroundColorSpan(color), 0, 1, 0);
+        t.setText(sp);
+        t.setPadding(dp(10), dp(4), dp(10), dp(4));
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(8));
+        g.setStroke(dp(1), LINE);
+        t.setBackground(g);
+        return t;
+    }
+
+    private void showThreat(ThreatMap.Threat t) {
+        if (t == null) { mapInfo.setText("Торкніться значка — подробиці. Двома пальцями — масштаб."); return; }
+        StringBuilder b = new StringBuilder();
+        b.append(t.title.length() > 0 ? t.title : ThreatMap.kindTitle(ThreatMap.kind(t)));
+        if (t.count > 1) b.append(" ×").append(t.count);
+        b.append(" — ").append(t.place.length() > 0 ? t.place : "").append(t.region.length() > 0 ? (t.place.length() > 0 ? ", " : "") + t.region : "");
+        if (t.heading >= 0) b.append("\nКурс: ").append(compass(t.heading)).append(" (").append(t.heading).append("°)");
+        if (t.uncKm > 0) b.append(t.heading >= 0 ? " · " : "\n").append("точність ±").append(Math.round(t.uncKm)).append(" км");
+        String ago = isoAgo(t.at);
+        if (ago != null) b.append(" · ").append(ago);
+        if ("approx".equals(t.quality)) b.append(" · наближено");
+        mapInfo.setText(b.toString());
+    }
+
+    private static String compass(int h) {
+        String[] d = {"на північ", "на північний схід", "на схід", "на південний схід", "на південь", "на південний захід", "на захід", "на північний захід"};
+        return d[((h + 22) % 360) / 45];
+    }
+
+    private static String isoAgo(String iso) {
+        try {
+            SimpleDateFormat f = new SimpleDateFormat("yyyy-MM-dd'T'HH:mm:ss", Locale.US);
+            f.setTimeZone(java.util.TimeZone.getTimeZone("UTC"));
+            long t = f.parse(iso.length() > 19 ? iso.substring(0, 19) : iso).getTime();
+            return "оновлено " + ago(t) + (ago(t).equals("щойно") ? "" : " тому");
+        } catch (Exception e) { return null; }
+    }
+
+    private void loadGeo() {
+        if (map.hasGeo()) return;
+        if (geoCache != null) { map.setGeo(geoCache); return; }
+        new Thread(new Runnable() {
+            public void run() {
+                try {
+                    java.io.InputStream in = getResources().openRawResource(R.raw.geo);
+                    java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+                    byte[] buf = new byte[65536];
+                    int n;
+                    while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+                    in.close();
+                    final GeoLookup g = GeoLookup.parse(new String(bo.toByteArray(), "UTF-8"));
+                    geoCache = g;
+                    runOnUiThread(new Runnable() { public void run() { map.setGeo(g); } });
+                } catch (Exception ignored) { }
+            }
+        }).start();
+    }
+
+    private final Runnable mapTick = new Runnable() {
+        public void run() {
+            if (!prefs.getBoolean(Prefs.MAP_VIEW, false)) return;
+            loadMapData();
+            ticker.postDelayed(this, 15000);
+        }
+    };
+
+    private void loadMapData() {
+        if (mapLoading) return;
+        mapLoading = true;
+        final String srv = AlertSource.server(this);
+        new Thread(new Runnable() {
+            public void run() {
+                List<ThreatMap.Threat> th = null;
+                org.json.JSONObject st = null;
+                String err = null;
+                try { th = ThreatMap.parseThreats(new org.json.JSONObject(AlertSource.download(srv + "/threats"))); }
+                catch (Exception e) { err = e.getMessage(); }
+                try { st = new org.json.JSONObject(AlertSource.download(srv + "/status")); } catch (Exception ignored) { }
+                final List<ThreatMap.Threat> fth = th;
+                final org.json.JSONObject fst = st;
+                final String ferr = err;
+                runOnUiThread(new Runnable() {
+                    public void run() {
+                        mapLoading = false;
+                        if (fst != null) map.setAlerts(fst);
+                        if (fth != null) { map.setThreats(fth); mapAt = System.currentTimeMillis(); mapErr = null; fillLegend(fth); }
+                        else mapErr = ferr;
+                        updateMapSummary();
+                    }
+                });
+            }
+        }).start();
+    }
+
+    private void fillLegend(List<ThreatMap.Threat> th) {
+        int[] n = new int[6];
+        for (ThreatMap.Threat t : th) n[ThreatMap.kind(t)] += t.count;
+        int[] cols = {ThreatMap.C_BALLISTIC, ThreatMap.C_MISSILE, ThreatMap.C_KAB, ThreatMap.C_UAV, ThreatMap.C_FPV, ThreatMap.C_AIR};
+        legend.removeAllViews();
+        for (int k : new int[]{3, 1, 0, 2, 4, 5})
+            if (n[k] > 0) legend.addView(legendChip(cols[k], ThreatMap.kindTitle(k) + ": " + n[k]));
+        legend.setVisibility(legend.getChildCount() > 0 ? View.VISIBLE : View.GONE);
+    }
+
+    private void updateMapSummary() {
+        String s;
+        if (mapAt == 0) s = mapErr != null ? "Немає зв'язку з сервером: " + mapErr : "Завантажую цілі…";
+        else {
+            s = "Оновлено о " + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(mapAt)) + " · щоп'ятнадцять секунд";
+            if (legend.getChildCount() == 0) s = "Зараз цілей на карті немає. " + s;
+            if (mapErr != null) s += " · остання спроба: " + mapErr;
+        }
+        mapSummary.setText(s);
     }
 
     private void refresh() {
@@ -812,6 +1022,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         SimpleDateFormat hm = new SimpleDateFormat("HH:mm", Locale.getDefault());
 
         place.setText(Prefs.place(this));
+        if (map != null) map.setPlace(Prefs.region(this), Prefs.raion(this));
         chips.removeAllViews();
         if (!on) {
             title.setText("Стеження вимкнено");

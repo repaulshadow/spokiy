@@ -38,6 +38,15 @@ class World:
         self.gen = 0
         self.requests = {}
         self.reports = []      # звіти програми (POST /report)
+        self.threats = [       # цілі на карті (як /threats сервера)
+            {"id": "t1", "t": "uav", "n": "БпЛА", "la": 46.62, "lo": 31.35, "h": 260, "u": 4, "q": "approx", "c": "medium", "k": 3, "p": "Очаків", "r": "Миколаївська область",
+             "tr": [46.70, 31.95, 46.67, 31.70, 46.64, 31.50]},
+            {"id": "t2", "t": "uav", "n": "БпЛА", "la": 50.55, "lo": 29.81, "h": 223, "u": 4, "q": "confirmed", "c": "high", "k": 1, "p": "Наливайківка", "r": "Київська область", "tr": []},
+            {"id": "t3", "t": "kab", "n": "Керована авіабомба", "la": 47.85, "lo": 35.9, "h": None, "u": 10, "q": "approx", "c": "medium", "k": 1, "p": "Оріхів", "r": "Запорізька область", "tr": []},
+            {"id": "t4", "t": "cruise_missile", "n": "Крилата ракета", "la": 48.9, "lo": 32.4, "h": 290, "u": 15, "q": "approx", "c": "medium", "k": 2, "p": "Кропивницький", "r": "Кіровоградська область",
+             "tr": [48.3, 34.0, 48.6, 33.2]},
+            {"id": "t5", "t": "fpv", "n": "FPV-дрон", "la": 47.57, "lo": 34.38, "h": None, "u": 25, "q": "confirmed", "c": "medium", "k": 1, "p": "Нікополь", "r": "Дніпропетровська область", "tr": []},
+        ]
     def changed(self):
         self.gen += 1
 
@@ -114,6 +123,8 @@ class H(BaseHTTPRequestHandler):
             ws_loop(self.connection, self.headers.get("Sec-WebSocket-Key"), ua_rest, ua_down)
             return
         if path == "/status": return self.send(200, json.dumps(status()).encode())
+        if path == "/threats":
+            with W.lock: return self.send(200, json.dumps({"ok": True, "at": NOW, "items": W.threats}).encode())
         if path == "/api/v1/alerts": return self.send(200, json.dumps(neptun_rest()).encode())
         if path == "/version.json":
             if not W.version: return self.send(404, b"{}")

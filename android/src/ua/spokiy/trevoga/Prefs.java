@@ -20,6 +20,7 @@ final class Prefs {
     // автовизначення району за геопозицією
     static final String AUTO_PLACE = "auto_place", AUTO_REGION = "auto_region", AUTO_RAION = "auto_raion",
             AUTO_INFO = "auto_info", AUTO_FIX = "auto_fix";
+    static final String MAP_VIEW = "map_view";   // головний екран: простий вигляд або з картою цілей
 
     static final String CH_STATUS = "status_v2", CH_ALERT = "alert_v1";
 

@@ -60,6 +60,50 @@ function json(obj, status = 200, extra = {}) {
   });
 }
 
+// Цілі на карті (дрони, ракети, КАБи) — з NEPTUN (/api/v1/threats; положення приблизні). Скорочуємо поля,
+// кешуємо на краю 10 с, щоб програми не навантажували NEPTUN. Умова: видиме посилання на NEPTUN.
+const THREATS_CACHE_S = 10;
+const r4 = (x) => (typeof x === "number" && isFinite(x) ? Math.round(x * 1e4) / 1e4 : null);
+function trimThreats(j) {
+  const items = (Array.isArray(j && j.threats) ? j.threats : [])
+    .filter((x) => x && typeof x.lat === "number" && typeof x.lon === "number" && (x.status || "active") === "active")
+    .slice(0, 500)
+    .map((x) => {
+      const tr = [];
+      for (const p of (Array.isArray(x.trail) ? x.trail : []).slice(-20)) if (p && typeof p.lat === "number") tr.push(r4(p.lat), r4(p.lon));
+      return {
+        id: String(x.id || ""), t: String(x.type || ""), n: String(x.title || ""), la: r4(x.lat), lo: r4(x.lon),
+        h: typeof x.heading === "number" ? Math.round(x.heading) : null, u: typeof x.uncertaintyKm === "number" ? x.uncertaintyKm : null,
+        q: x.positionQuality || "", c: x.displayConfidence || x.confidenceLevel || "", k: typeof x.count === "number" ? x.count : 1,
+        at: x.updatedAt || null, p: String(x.locality || ""), r: String(x.region || ""), tr,
+      };
+    });
+  return { ok: true, at: (j && j.serverTime) || new Date().toISOString(), items };
+}
+async function threats(env, ctx, url) {
+  const cache = caches.default;
+  const key = new Request(url.origin + "/threats", { method: "GET" });
+  const hit = await cache.match(key);
+  if (hit) return hit;
+  let body, status = 200;
+  try {
+    const r = await fetch((env.NEPTUN || NEPTUN_DEFAULT) + "/api/v1/threats", {
+      headers: { "User-Agent": "Trevoga/1.0 (+https://github.com/repaulshadow/spokiy)", Accept: "application/json" },
+    });
+    if (!r.ok) throw new Error("NEPTUN: відповідь " + r.status);
+    body = JSON.stringify(trimThreats(await r.json()));
+  } catch (e) {
+    status = 502;
+    body = JSON.stringify({ ok: false, error: String(e && e.message ? e.message : e) });
+  }
+  const out = new Response(body, {
+    status,
+    headers: { "Content-Type": "application/json; charset=utf-8", "Cache-Control": `public, max-age=${status === 200 ? THREATS_CACHE_S : 3}`, ...CORS },
+  });
+  if (status === 200) ctx.waitUntil(cache.put(key, out.clone()));
+  return out;
+}
+
 export default {
   async fetch(request, env, ctx) {
     const url = new URL(request.url);
@@ -110,6 +154,7 @@ export default {
       const r = await env.ALERTS.get(id).fetch("https://do/health");
       return new Response(r.body, { status: r.status, headers: { "Content-Type": "application/json; charset=utf-8", ...CORS } });
     }
+    if (url.pathname === "/threats") return threats(env, ctx, url);
     if (url.pathname !== "/status") return json({ ok: false, error: "not found" }, 404);
 
     // 1) Кэш на краю
