@@ -1,0 +1,9 @@
+name: Check /threats
+on: workflow_dispatch
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - run: |
+          curl -s https://trevoga.seokernel.workers.dev/threats > t.json
+          python3 -c "import json,collections;j=json.load(open('t.json'));print('::notice title=threats::ok=%s n=%d types=%s first=%s'%(j.get('ok'),len(j.get('items',[])),dict(collections.Counter(x['t'] for x in j.get('items',[]))),json.dumps(j.get('items',[{}])[0],ensure_ascii=False)[:400]))"
