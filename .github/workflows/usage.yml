@@ -68,6 +68,26 @@ jobs:
               f"Пиковый час (UTC): {peak[0]} — {peak[1]} запросов",
               "По часам (UTC): " + ", ".join(f"{h} {n}" for h, n in hours),
           ]
+          # Durable Object: час роботи, читання/запис SQLite, обсяг сховища (окремо — поля можуть відрізнятися)
+          for name, qq in [
+              ("periodic", "durableObjectsPeriodicGroups(limit: 10, filter: {datetime_geq: $from, datetime_leq: $to}) { sum { activeTime cpuTime storageReadUnits storageWriteUnits rowsRead rowsWritten } }"),
+              ("periodic2", "durableObjectsPeriodicGroups(limit: 10, filter: {datetime_geq: $from, datetime_leq: $to}) { sum { activeTime cpuTime } }"),
+              ("storage", "durableObjectsStorageGroups(limit: 5, filter: {datetime_geq: $from, datetime_leq: $to}) { max { storedBytes } }"),
+              ("sql", "durableObjectsSqlStorageGroups(limit: 5, filter: {datetime_geq: $from, datetime_leq: $to}) { max { storedBytes } }"),
+          ]:
+              q2 = "query($acc: String!, $from: Time!, $to: Time!) { viewer { accounts(filter: {accountTag: $acc}) { x: " + qq + " } } }"
+              b2 = json.dumps({"query": q2, "variables": {"acc": acc, "from": frm.isoformat().replace("+00:00", "Z"), "to": now.isoformat().replace("+00:00", "Z")}}).encode()
+              try:
+                  r2 = json.load(urllib.request.urlopen(urllib.request.Request("https://api.cloudflare.com/client/v4/graphql", data=b2, headers={
+                      "Authorization": "Bearer " + os.environ["CLOUDFLARE_API_TOKEN"], "Content-Type": "application/json"}), timeout=30))
+                  lines.append(f"DO {name} за 24 ч: " + (json.dumps(r2["data"]["viewer"]["accounts"][0]["x"]) if not r2.get("errors") else "помилка: " + r2["errors"][0].get("message", "")[:200]))
+              except Exception as ex:
+                  lines.append(f"DO {name}: {ex}")
+          try:
+              h = json.load(urllib.request.urlopen("https://trevoga.seokernel.workers.dev/health", timeout=20))
+              lines.append("health: " + json.dumps(h.get("sources", h), ensure_ascii=False)[:1500])
+          except Exception as ex:
+              lines.append(f"health: {ex}")
           for ln in lines:
               print("::notice title=usage::" + ln)
           with open(os.environ["GITHUB_STEP_SUMMARY"], "a") as f:
