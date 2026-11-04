@@ -42,6 +42,7 @@ jobs:
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add Trevoga-mac.zip
           git commit -m "Mac $(cat mac/VERSION) ($(cat mac/BUILD))"
+          git checkout -- mac || true
           git pull --rebase -q origin main
           git push
           gh workflow run deploy-server.yml --ref main
