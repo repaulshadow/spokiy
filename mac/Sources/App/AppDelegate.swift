@@ -43,8 +43,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
         window.title = "Тривога"
         window.contentView = NSHostingView(rootView: ContentView())
         window.isReleasedWhenClosed = false
+        if !window.setFrameUsingName("main") { window.center() }
         window.setFrameAutosaveName("main")
-        if window.frame.origin == .zero { window.center() }
         window.delegate = self
 
         item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
@@ -126,6 +126,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
     func windowWillClose(_ n: Notification) {
         NSApp.setActivationPolicy(.accessory)
     }
+
+    func applicationSupportsSecureRestorableState(_ app: NSApplication) -> Bool { true }
 
     func applicationShouldTerminateAfterLastWindowClosed(_ s: NSApplication) -> Bool { false }
 

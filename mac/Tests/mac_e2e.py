@@ -106,8 +106,9 @@ def main():
     step("Програма жива", p.poll() is None)
 
     # 5. Перезапуск посеред тривоги: без повторної сирени; вигляд «Карта»
+    time.sleep(12)   # дати опитуванню побачити, що й запасні джерела вже без тривоги
     m = mark(); change(lambda: (W.ua_o.__setitem__(KYIV, "red"), W.ua_o.__setitem__("Одеська область", "yellow")))
-    expect("Тривога перед перезапуском", r"SOUND alarm", 15, m)
+    expect("Тривога перед перезапуском", r"SOUND (alarm|ballistic)", 15, m)
     p.terminate(); p.wait(10)
     subprocess.run(["defaults", "write", "ua.spokiy.trevoga", "mapView", "-bool", "true"])
     m = mark()

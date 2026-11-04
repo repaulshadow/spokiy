@@ -296,11 +296,22 @@ final class Notifier: NSObject, UNUserNotificationCenterDelegate {
 
     func post(_ title: String, _ body: String) {
         guard Bundle.main.bundleIdentifier != nil else { return }
+        if !available { legacy(title, body); return }
         let c = UNMutableNotificationContent()
         c.title = title
         c.body = body
         if #available(macOS 12.0, *) { c.interruptionLevel = .timeSensitive }
         UNUserNotificationCenter.current().add(UNNotificationRequest(identifier: "alert", content: c, trigger: nil))
+    }
+
+    /** Запасний шлях, якщо система не дозволила сучасні сповіщення (програма без підпису розробника Apple). */
+    @available(macOS, deprecated: 11.0)
+    private func legacy(_ title: String, _ body: String) {
+        let n = NSUserNotification()
+        n.title = title
+        n.informativeText = body
+        n.identifier = "alert-\(nowMs())"
+        NSUserNotificationCenter.default.deliver(n)
     }
 
     func userNotificationCenter(_ center: UNUserNotificationCenter, willPresent n: UNNotification,
