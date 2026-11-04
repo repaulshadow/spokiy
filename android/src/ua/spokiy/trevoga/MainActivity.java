@@ -51,10 +51,11 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     private SharedPreferences prefs;
     private LinearLayout mapCard;
     private ThreatMap map;
-    private TextView mapInfo, mapSummary;
-    private FlowLayout legend;
+    private TextView mapInfo, mapSummary, mapMe;
+    private LinearLayout legend;
     private final List<TextView> segs = new ArrayList<TextView>();
     private static GeoLookup geoCache;
+    private static ThreatMap.Cities citiesCache;
     private volatile boolean mapLoading;
     private long mapAt;
     private String mapErr;
@@ -136,6 +137,13 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         place.setPadding(0, dp(6), 0, 0);
         detail = text("", 14, 0xD9FFFFFF, false);
         detail.setPadding(0, dp(2), 0, 0);
+        // фіксовані рядки — щоб картка не «стрибала», коли текст довший/коротший
+        title.setMaxLines(2);
+        place.setSingleLine(true);
+        place.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        detail.setLines(2);
+        detail.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        tnum(detail);
         chips = new FlowLayout(this, dp(8));
         chips.setPadding(0, dp(16), 0, 0);
         statusCard.addView(title);
@@ -371,6 +379,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         home.addView(homeRow, matchWrap(dp(16)));
 
         footer = text("", 12, MUTED, false);
+        tnum(footer);
         footer.setPadding(dp(4), dp(14), dp(4), 0);
         home.addView(footer);
 
@@ -769,6 +778,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
         if (req != REQ_LOCATION) return;
         updateAutoUi();
+        if (mapMe != null) updateMe();
         if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.checkNow(this);
     }
 
@@ -835,8 +845,10 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             final int idx = i;
             TextView t = text(labels[i], 14, TEXT, true);
             t.setGravity(Gravity.CENTER);
-            t.setPadding(dp(14), 0, dp(14), 0);
+            t.setPadding(dp(12), 0, dp(12), 0);
             t.setMinHeight(dp(38));
+            // ширина з запасом під «✓», щоб перемикач не змінював розмір
+            t.setMinWidth((int) (t.getPaint().measureText("✓ " + labels[i]) + dp(24) + 1));
             t.setContentDescription(labels[i]);
             t.setClickable(true);
             t.setOnClickListener(new View.OnClickListener() {
@@ -866,6 +878,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         }
         mapCard.setVisibility(on ? View.VISIBLE : View.GONE);
         statusCard.setMinimumHeight(on ? 0 : dp(200));
+        chips.setVisibility(chips.getChildCount() > 0 && !on ? View.VISIBLE : View.GONE);
         title.setTextSize(on ? 24 : 30);
         if (on) { loadGeo(); ticker.removeCallbacks(mapTick); ticker.post(mapTick); }
     }
@@ -875,23 +888,100 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         mapCard.setPadding(dp(8), dp(8), dp(8), dp(12));
         map = new ThreatMap(this);
         map.setColors(night ? 0xFF3A2E2D : 0xFFFFFFFF, night ? 0xFF8C7A78 : 0xFFA08C8A, TEXT, PRIMARY, CARD);
-        mapCard.addView(map, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        // подробиці про ціль — поверх карти внизу, не зсуваючи решту екрана
+        FrameLayout frame = new FrameLayout(this);
+        frame.addView(map, new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT));
+        mapInfo = text("", 13, TEXT, false);
+        mapInfo.setMaxLines(3);
+        mapInfo.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        mapInfo.setPadding(dp(12), dp(8), dp(12), dp(8));
+        tnum(mapInfo);
+        GradientDrawable ib = new GradientDrawable();
+        ib.setCornerRadius(dp(12));
+        ib.setColor((CARD & 0x00FFFFFF) | 0xF2000000);
+        ib.setStroke(dp(1), LINE);
+        mapInfo.setBackground(ib);
+        mapInfo.setVisibility(View.GONE);
+        mapInfo.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { mapInfo.setVisibility(View.GONE); }
+        });
+        FrameLayout.LayoutParams ip = new FrameLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, ViewGroup.LayoutParams.WRAP_CONTENT, Gravity.BOTTOM);
+        ip.setMargins(dp(6), 0, dp(6), dp(6));
+        frame.addView(mapInfo, ip);
+        mapCard.addView(frame);
         map.setOnSelect(new ThreatMap.OnSelect() {
             public void selected(ThreatMap.Threat t) { showThreat(t); }
         });
-        mapInfo = text("Торкніться значка — подробиці. Двома пальцями — масштаб.", 13, TEXT, false);
-        mapInfo.setPadding(dp(8), dp(10), dp(8), 0);
-        mapCard.addView(mapInfo);
-        legend = new FlowLayout(this, dp(6));
-        legend.setPadding(dp(8), dp(8), dp(8), 0);
-        mapCard.addView(legend);
+        // своє місце — один рядок завжди (щоб нічого не зсувалося)
+        mapMe = text("", 13, TEXT, true);
+        mapMe.setSingleLine(true);
+        mapMe.setEllipsize(android.text.TextUtils.TruncateAt.END);
+        mapMe.setPadding(dp(8), dp(10), dp(8), 0);
+        mapMe.setOnClickListener(new View.OnClickListener() {
+            public void onClick(View v) { if (!hasLocation()) askLocation(); }
+        });
+        mapCard.addView(mapMe);
+        // легенда — одна прокручувана смуга фіксованої висоти
+        android.widget.HorizontalScrollView hs = new android.widget.HorizontalScrollView(this);
+        hs.setHorizontalScrollBarEnabled(false);
+        legend = row();
+        legend.setGravity(Gravity.CENTER_VERTICAL);
+        hs.addView(legend);
+        hs.setPadding(dp(8), dp(8), dp(8), 0);
+        mapCard.addView(hs, new LinearLayout.LayoutParams(ViewGroup.LayoutParams.MATCH_PARENT, dp(36)));
+        addLegend(legendChip(MUTED, "Завантажую цілі…"));
         mapSummary = text("", 12, MUTED, false);
+        mapSummary.setSingleLine(true);
+        mapSummary.setEllipsize(android.text.TextUtils.TruncateAt.END);
         mapSummary.setPadding(dp(8), dp(8), dp(8), 0);
+        tnum(mapSummary);
         mapCard.addView(mapSummary);
-        TextView warn = text("Положення цілей приблизні й можуть запізнюватися; частина цілей може не з'явитися. "
-                + "Порожня карта не означає, що небезпеки немає — орієнтуйтеся на тривогу. Дані про цілі: NEPTUN.", 12, MUTED, false);
+        TextView warn = text("Двома пальцями — масштаб, торкніться значка — подробиці. Положення цілей приблизні й можуть "
+                + "запізнюватися; частина цілей може не з'явитися. Порожня карта не означає, що небезпеки немає — "
+                + "орієнтуйтеся на тривогу. Цілі: NEPTUN · міста: GeoNames.", 12, MUTED, false);
         warn.setPadding(dp(8), dp(6), dp(8), 0);
         mapCard.addView(warn);
+        updateMe();
+        updateMapSummary();
+    }
+
+    private void tnum(TextView t) {
+        if (Build.VERSION.SDK_INT >= 21) t.setFontFeatureSettings("tnum");   // цифри однакової ширини — час не «тремтить»
+    }
+
+    /** Де користувач: остання надійна точка автовизначення, інакше остання відома геопозиція (якщо є дозвіл). */
+    @SuppressWarnings("MissingPermission")
+    private double[] myLocation() {
+        long now = System.currentTimeMillis();
+        String fix = prefs.getString(Prefs.AUTO_FIX, null);
+        if (fix != null) {
+            try {
+                String[] f = fix.split(",");
+                if (now - Long.parseLong(f[3]) < 6 * 3600000L) return new double[]{Double.parseDouble(f[0]), Double.parseDouble(f[1])};
+            } catch (Exception ignored) { }
+        }
+        if (!hasLocation()) return null;
+        try {
+            android.location.LocationManager lm = (android.location.LocationManager) getSystemService(LOCATION_SERVICE);
+            android.location.Location best = null;
+            for (String pr : lm.getProviders(true)) {
+                android.location.Location l = lm.getLastKnownLocation(pr);
+                if (l == null || (Build.VERSION.SDK_INT >= 18 && l.isFromMockProvider())) continue;
+                if (best == null || l.getTime() > best.getTime()) best = l;
+            }
+            if (best == null || now - best.getTime() > 6 * 3600000L) return null;
+            if (geoCache != null && geoCache.find(best.getLatitude(), best.getLongitude()) == null) return null;   // поза Україною — підміна/РЕБ
+            return new double[]{best.getLatitude(), best.getLongitude()};
+        } catch (Exception e) { return null; }
+    }
+
+    private void updateMe() {
+        double[] me = myLocation();
+        if (me == null) map.setMe(Double.NaN, Double.NaN); else map.setMe(me[0], me[1]);
+        String city = map.meCityName();
+        if (me == null) mapMe.setText(hasLocation() ? "📍 Місце поки невідоме — " + Prefs.place(this) : "📍 Показати себе на карті — дозволити геопозицію");
+        else mapMe.setText("📍 Ви тут: " + (city != null ? city : Prefs.place(this)));
+        mapMe.setTextColor(me == null && !hasLocation() ? PRIMARY : TEXT);
     }
 
     private TextView legendChip(int color, String s) {
@@ -908,7 +998,8 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     }
 
     private void showThreat(ThreatMap.Threat t) {
-        if (t == null) { mapInfo.setText("Торкніться значка — подробиці. Двома пальцями — масштаб."); return; }
+        if (t == null) { mapInfo.setVisibility(View.GONE); return; }
+        mapInfo.setVisibility(View.VISIBLE);
         StringBuilder b = new StringBuilder();
         b.append(t.title.length() > 0 ? t.title : ThreatMap.kindTitle(ThreatMap.kind(t)));
         if (t.count > 1) b.append(" ×").append(t.count);
@@ -935,9 +1026,19 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         } catch (Exception e) { return null; }
     }
 
+    private String raw(int id) throws Exception {
+        java.io.InputStream in = getResources().openRawResource(id);
+        java.io.ByteArrayOutputStream bo = new java.io.ByteArrayOutputStream();
+        byte[] buf = new byte[65536];
+        int n;
+        while ((n = in.read(buf)) > 0) bo.write(buf, 0, n);
+        in.close();
+        return new String(bo.toByteArray(), "UTF-8");
+    }
+
     private void loadGeo() {
         if (map.hasGeo()) return;
-        if (geoCache != null) { map.setGeo(geoCache); return; }
+        if (geoCache != null && citiesCache != null) { map.setGeo(geoCache); map.setCities(citiesCache); updateMe(); return; }
         new Thread(new Runnable() {
             public void run() {
                 try {
@@ -949,7 +1050,9 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
                     in.close();
                     final GeoLookup g = GeoLookup.parse(new String(bo.toByteArray(), "UTF-8"));
                     geoCache = g;
-                    runOnUiThread(new Runnable() { public void run() { map.setGeo(g); } });
+                    final ThreatMap.Cities c = ThreatMap.Cities.parse(raw(R.raw.cities));
+                    citiesCache = c;
+                    runOnUiThread(new Runnable() { public void run() { map.setGeo(g); map.setCities(c); updateMe(); } });
                 } catch (Exception ignored) { }
             }
         }).start();
@@ -981,6 +1084,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
                 runOnUiThread(new Runnable() {
                     public void run() {
                         mapLoading = false;
+                        updateMe();
                         if (fst != null) map.setAlerts(fst);
                         if (fth != null) { map.setThreats(fth); mapAt = System.currentTimeMillis(); mapErr = null; fillLegend(fth); }
                         else mapErr = ferr;
@@ -997,16 +1101,21 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         int[] cols = {ThreatMap.C_BALLISTIC, ThreatMap.C_MISSILE, ThreatMap.C_KAB, ThreatMap.C_UAV, ThreatMap.C_FPV, ThreatMap.C_AIR};
         legend.removeAllViews();
         for (int k : new int[]{3, 1, 0, 2, 4, 5})
-            if (n[k] > 0) legend.addView(legendChip(cols[k], ThreatMap.kindTitle(k) + ": " + n[k]));
-        legend.setVisibility(legend.getChildCount() > 0 ? View.VISIBLE : View.GONE);
+            if (n[k] > 0) addLegend(legendChip(cols[k], ThreatMap.kindTitle(k) + ": " + n[k]));
+        if (legend.getChildCount() == 0) addLegend(legendChip(GREEN, "Цілей на карті немає"));
+    }
+
+    private void addLegend(View v) {
+        LinearLayout.LayoutParams lp = new LinearLayout.LayoutParams(ViewGroup.LayoutParams.WRAP_CONTENT, ViewGroup.LayoutParams.WRAP_CONTENT);
+        if (legend.getChildCount() > 0) lp.leftMargin = dp(6);
+        legend.addView(v, lp);
     }
 
     private void updateMapSummary() {
         String s;
         if (mapAt == 0) s = mapErr != null ? "Немає зв'язку з сервером: " + mapErr : "Завантажую цілі…";
         else {
-            s = "Оновлено о " + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(mapAt)) + " · щоп'ятнадцять секунд";
-            if (legend.getChildCount() == 0) s = "Зараз цілей на карті немає. " + s;
+            s = "Оновлено о " + new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date(mapAt)) + " · кожні 15 с";
             if (mapErr != null) s += " · остання спроба: " + mapErr;
         }
         mapSummary.setText(s);
@@ -1051,7 +1160,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             detail.setText(err != null ? err : "");
             paintCard(GRAY);
         }
-        chips.setVisibility(chips.getChildCount() > 0 ? View.VISIBLE : View.GONE);
+        chips.setVisibility(chips.getChildCount() > 0 && !prefs.getBoolean(Prefs.MAP_VIEW, false) ? View.VISIBLE : View.GONE);
 
         StringBuilder f = new StringBuilder();
         String t = prefs.getString(Prefs.STATUS_TIME, null);

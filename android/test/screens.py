@@ -34,6 +34,11 @@ def tap_desc(desc):
 def size():
     m = re.search(r"(\d+)x(\d+)", adb("shell", "wm", "size"))
     return (int(m.group(1)), int(m.group(2))) if m else (320, 640)
+def bounds(desc):
+    adb("shell", "uiautomator", "dump", "/sdcard/u.xml")
+    x = adb("shell", "cat", "/sdcard/u.xml")
+    m = re.search(r'content-desc="' + re.escape(desc) + r'"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', x)
+    return list(map(int, m.groups())) if m else None
 def swipe_up():
     w, h = size()
     adb("shell", "input", "swipe", str(w // 2), str(h * 8 // 10), str(w // 2), str(h * 3 // 10), "500")
@@ -50,8 +55,10 @@ adb("install", "-r", "-g", APK)
 adb("shell", "dumpsys", "deviceidle", "whitelist", "+" + PKG)
 adb("shell", "settings", "put", "global", "heads_up_notifications_enabled", "0")
 adb("logcat", "-c")
+adb("emu", "geo", "fix", "30.7233", "46.4825")   # Одеса
 adb("shell", "am", "start", "-n", PKG + "/.MainActivity")
 log_has(r"STATE Clear", 90)
+for _ in range(3): adb("emu", "geo", "fix", "30.7233", "46.4825"); time.sleep(3)
 time.sleep(2); tap_text("OK")   # Android 14: попередження про старий targetSdk
 shot("01_home")
 tap_desc("Налаштування"); shot("02_settings_1")
@@ -60,13 +67,18 @@ swipe_up(); shot("04_settings_3")
 swipe_up(); shot("04_settings_4")
 adb("shell", "input", "keyevent", "KEYCODE_BACK")
 adb("logcat", "-c")
-change(lambda: W.ua_o.__setitem__(e2e.ON[e2e.ON.index("м. Київ")], "red"))
+change(lambda: (W.ua_o.__setitem__("м. Київ", "red"), W.ua_o.__setitem__("Одеська область", "yellow")))
 log_has(r"STATE Alert", 30)
 adb("shell", "am", "start", "-n", PKG + "/.MainActivity")
 shot("05_home_alert")
 tap_desc("Карта"); time.sleep(6); shot("05b_map")
-w, h = size(); adb("shell", "input", "tap", str(w * 45 // 100), str(h * 55 // 100)); time.sleep(0.15)
-adb("shell", "input", "tap", str(w * 45 // 100), str(h * 55 // 100)); time.sleep(2); shot("05c_map_zoom")
+b = bounds("Карта цілей")
+if b:
+    W_ = b[2] - b[0]; ox = b[0] + int(W_ * 0.476); oy = b[1] + int((b[3] - b[1]) * 0.5 + (0.733 - 0.5) * W_ / 12.13 * 8.15)
+    for _ in range(2):
+        adb("shell", "input", "tap", str(ox), str(oy)); time.sleep(0.12); adb("shell", "input", "tap", str(ox), str(oy)); time.sleep(1.5)
+    shot("05c_map_zoom")
+    adb("shell", "input", "tap", str(ox + int(0.1666 * W_)), str(oy - int(0.0559 * W_))); time.sleep(1.5); shot("05d_map_threat")
 adb("shell", "cmd", "statusbar", "expand-notifications"); shot("06_shade_alert")
 adb("shell", "cmd", "statusbar", "collapse")
 adb("shell", "cmd", "uimode", "night", "yes"); time.sleep(3); shot("07_home_alert_dark")
