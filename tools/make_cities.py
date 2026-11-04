@@ -15,9 +15,10 @@ for r in csv.reader(io.StringIO(zget("https://download.geonames.org/export/dump/
 out, miss = [], 0
 for r in rows:
     gid, name, lat, lon, code, pop = r[0], r[1], float(r[4]), float(r[5]), r[7], int(r[14] or 0)
+    if code in ("PPLX", "PPLH", "PPLQ", "PPLW"): continue   # частини міст, історичні, покинуті
     if gid in uk: name = uk[gid][1]
-    else: miss += 1
-    cap = 2 if code == "PPLC" else 1 if code == "PPLA" else 0
+    else: miss += 1; continue
+    cap = 2 if code == "PPLC" else 1 if code == "PPLA" or name == "Сімферополь" else 0
     out.append([name, round(lat * 1e4), round(lon * 1e4), pop, cap])
 out.sort(key=lambda x: (-x[4], -x[3]))
 json.dump(out, open("android/res/raw/cities.json", "w", encoding="utf-8"), ensure_ascii=False, separators=(",", ":"))
