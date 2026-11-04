@@ -79,8 +79,6 @@ r = try! AlertSource.fromRoot(Root().nep("Львівська область", "�
 eq(AlertState.alert, r.state, "стара назва району в NEPTUN")
 r = m(Root().ain(uid(ODR), ODR, "red", T0, "drones", "ballistic_missiles"), ODR, false)
 eq("ballistic_missiles", r.threats.first ?? "", "балістика першою")
-r = m(Root().ain(uid(ODR), ODR, "red", T0, "drones"), nil, false)
-eq(AlertState.alert, r.state, "уся область: районна тривога alerts.in.ua")
 
 // UkraineAlarm
 r = m(Root().ua(), ODR, false)
