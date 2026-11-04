@@ -1,0 +1,47 @@
+name: Mac app
+
+# Збирання й перевірка Тривога.app (macOS, Apple Silicon + Intel). Знімки екрана — у гілку screens-mac.
+# release=true: після успішних тестів кладе Trevoga-mac.zip у репозиторій і запускає публікацію (Deploy server).
+on:
+  workflow_dispatch:
+    inputs:
+      release:
+        description: "Опублікувати (true/false)"
+        default: "false"
+
+permissions:
+  contents: write
+  actions: write
+
+env:
+  PYTHONUTF8: "1"
+
+jobs:
+  mac:
+    runs-on: macos-14
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v5
+      - run: sh mac/build.sh
+      - name: Наскрізний тест
+        run: python3 mac/Tests/mac_e2e.py mac/build/Trevoga.app shots
+      - name: Знімки екрана → гілка screens-mac
+        if: always()
+        run: |
+          [ -d shots ] || exit 0
+          cd shots && git init -q -b screens && git add -A
+          git -c user.name=ci -c user.email=ci@localhost commit -qm "mac screens"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" screens:screens-mac
+      - name: Публікація
+        if: inputs.release == 'true'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          cp mac/build/Trevoga-mac.zip Trevoga-mac.zip
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Trevoga-mac.zip
+          git commit -m "Mac $(cat mac/VERSION) ($(cat mac/BUILD))"
+          git pull --rebase -q origin main
+          git push
+          gh workflow run deploy-server.yml --ref main

@@ -5,7 +5,7 @@ name: Deploy server (Cloudflare)
 on:
   push:
     branches: [main]
-    paths: ["server/**", ".github/workflows/deploy-server.yml", "Trevoga.exe", "Trevoga.apk"]
+    paths: ["server/**", ".github/workflows/deploy-server.yml", "Trevoga.exe", "Trevoga.apk", "Trevoga-mac.zip"]
   workflow_dispatch:
 
 permissions:
@@ -64,8 +64,14 @@ jobs:
               code = int(re.search(r'android:versionCode="(\d+)"', man).group(1))
               name = re.search(r'android:versionName="([^"]+)"', man).group(1)
               out["android"] = {"code": code, "name": name, "url": "/download/Trevoga.apk", "sha256": sha(apk), "size": os.path.getsize(apk)}
+          mz = os.path.join(root, "Trevoga-mac.zip")
+          if os.path.exists(mz):
+              shutil.copy(mz, "public/download/Trevoga-mac.zip")
+              mv = open(os.path.join(root, "mac/VERSION")).read().strip()
+              mb = int(open(os.path.join(root, "mac/BUILD")).read().strip())
+              out["mac"] = {"version": mv, "build": mb, "url": "/download/Trevoga-mac.zip", "sha256": sha(mz), "size": os.path.getsize(mz)}
           json.dump(out, open("public/version.json", "w"), indent=2)
-          print("::notice title=version.json::" + json.dumps({k: {kk: v[kk] for kk in ("version", "code", "name") if kk in v} for k, v in out.items()}))
+          print("::notice title=version.json::" + json.dumps({k: {kk: v[kk] for kk in ("version", "code", "name", "build") if kk in v} for k, v in out.items()}))
           PY
 
       - name: Deploy worker

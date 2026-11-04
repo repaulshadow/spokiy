@@ -125,6 +125,15 @@ jobs:
           emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
           script: python3 android/test/android_e2e.py build/test.apk
 
+  mac:
+    name: Mac — логіка, потік, наскрізний тест
+    runs-on: macos-14
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v5
+      - run: sh mac/build.sh
+      - run: python3 mac/Tests/mac_e2e.py mac/build/Trevoga.app
+
   soak:
     name: Довгий тест пам'яті (Windows)
     if: ${{ github.event_name == 'workflow_dispatch' && inputs.soak_minutes != '0' }}
