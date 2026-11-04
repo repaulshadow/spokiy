@@ -1,0 +1,22 @@
+name: Cities data (Android map)
+
+# Оновлює android/res/raw/cities.json — міста для карти (GeoNames, CC BY 4.0).
+on: workflow_dispatch
+
+permissions:
+  contents: write
+
+jobs:
+  cities:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v5
+      - run: python3 tools/make_cities.py
+      - name: Commit
+        run: |
+          git config user.name "github-actions"
+          git config user.email "github-actions@users.noreply.github.com"
+          git add android/res/raw/cities.json
+          git diff --cached --quiet || git commit -m "Cities for Android map (GeoNames)"
+          git push
