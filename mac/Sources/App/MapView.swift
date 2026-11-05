@@ -29,6 +29,10 @@ struct MapView: View {
             CGPoint(x: ((p.x - MapView.minX) * s + ox) * z + px, y: ((p.y - MapView.minY) * s + oy) * z + py)
         }
         func ll(_ lat: Double, _ lon: Double) -> CGPoint { pt(MapGeo.proj(lat, lon)) }
+        /** Екран → проєкція (для меж видимої ділянки). */
+        func inv(_ q: CGPoint) -> CGPoint {
+            CGPoint(x: ((q.x - px) / z - ox) / s + MapView.minX, y: ((q.y - py) / z - oy) / s + MapView.minY)
+        }
         var affine: CGAffineTransform {
             CGAffineTransform(translationX: -MapView.minX, y: -MapView.minY).concatenating(CGAffineTransform(scaleX: s, y: s))
                 .concatenating(CGAffineTransform(translationX: ox, y: oy)).concatenating(CGAffineTransform(scaleX: z, y: z))
@@ -86,7 +90,7 @@ struct MapView: View {
                         VStack(spacing: 6) {
                             mapButton("plus") { zoomBy(1.6, geo.size) }
                             mapButton("minus") { zoomBy(1 / 1.6, geo.size) }
-                            mapButton("arrow.counterclockwise") { zoom = 1; pan = .zero }
+                            mapButton("arrow.counterclockwise") { zoom = 1; pan = .zero; publish(geo.size) }
                         }
                     }
                     Spacer()
@@ -115,6 +119,15 @@ struct MapView: View {
         pan = CGSize(width: cx - (cx - pan.width) * k, height: cy - (cy - pan.height) * k)
         zoom = nz
         clamp(size)
+        publish(size)
+    }
+
+    /** Повідомити видиму ділянку — підсумок під картою рахує лише її цілі. */
+    private func publish(_ size: CGSize) {
+        if zoom * pinch <= 1.3 { if model.focus != nil { model.focus = nil }; return }
+        let x = xf(size)
+        let a = x.inv(.zero), b = x.inv(CGPoint(x: size.width, y: size.height))
+        model.focus = CGRect(x: min(a.x, b.x), y: min(a.y, b.y), width: abs(b.x - a.x), height: abs(b.y - a.y))
     }
 
     private func commitPinch(_ size: CGSize) {
@@ -123,6 +136,7 @@ struct MapView: View {
         zoom = max(1, min(14, zoom * pinch))
         pinch = 1
         clamp(size)
+        publish(size)
     }
 
     private func clamp(_ size: CGSize) {
@@ -137,6 +151,7 @@ struct MapView: View {
                 if hypot(v.translation.width, v.translation.height) <= 4 { tap(v.location, size) }
                 else { pan.width += v.translation.width; pan.height += v.translation.height; clamp(size) }
                 drag = .zero
+                publish(size)
             }
     }
 
@@ -182,11 +197,19 @@ struct MapView: View {
 
         // цілі
         let pxPerKm = x.s * x.z / 111
-        for t in model.threats where t.trail.count >= 1 {
-            var p = Path()
-            for (i, q) in t.trail.enumerated() { let s = x.ll(q.0, q.1); if i == 0 { p.move(to: s) } else { p.addLine(to: s) } }
-            p.addLine(to: x.ll(t.lat, t.lon))
-            ctx.stroke(p, with: .color(Color(rgb: t.kind.rgb, 0.5)), style: StrokeStyle(lineWidth: 2, lineCap: .round, lineJoin: .round))
+        // маршрут — лише для вибраної цілі: пройдений шлях і прогноз за курсом (пунктир)
+        if let t = model.threats.first(where: { $0.id == selected }) {
+            if !t.trail.isEmpty {
+                var p = Path()
+                for (i, q) in t.trail.enumerated() { let s = x.ll(q.0, q.1); if i == 0 { p.move(to: s) } else { p.addLine(to: s) } }
+                p.addLine(to: x.ll(t.lat, t.lon))
+                ctx.stroke(p, with: .color(Color(rgb: t.kind.rgb, 0.8)), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+            }
+            if t.heading >= 0 {
+                let e = t.ahead(t.reachKm)
+                var p = Path(); p.move(to: x.ll(t.lat, t.lon)); p.addLine(to: x.ll(e.0, e.1))
+                ctx.stroke(p, with: .color(Color(rgb: t.kind.rgb, 0.6)), style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [7, 5]))
+            }
         }
         for t in model.threats {
             let c = x.ll(t.lat, t.lon)

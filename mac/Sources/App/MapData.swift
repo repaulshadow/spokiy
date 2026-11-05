@@ -88,6 +88,18 @@ struct Threat: Identifiable, Equatable {
     }
 }
 
+extension Threat {
+    /** Орієнтовна дальність прогнозу курсу (км). */
+    var reachKm: Double {
+        switch kind { case .ballistic: return 300; case .missile: return 400; case .kab: return 60; case .uav: return 120; case .fpv: return 20; case .other: return 100 }
+    }
+    /** Точка на відстані km за курсом (наближено). */
+    func ahead(_ km: Double) -> (Double, Double) {
+        let a = Double(heading) * .pi / 180
+        return (lat + km * cos(a) / 111, lon + km * sin(a) / (111 * cos(lat * .pi / 180)))
+    }
+}
+
 extension Threat.Kind {
     var title: String {
         switch self { case .ballistic: return "Балістика"; case .missile: return "Ракети"; case .kab: return "КАБи"
@@ -107,7 +119,25 @@ final class MapModel: ObservableObject {
     @Published var threats: [Threat] = []
     @Published var updated: Date?
     @Published var error: String?
+    /** Видима ділянка карти (у проєкції) — nil, якщо видно всю країну. */
+    @Published var focus: CGRect?
     private var timer: Timer?
+
+    /** Цілі для підсумку: на всій карті — усі; у наближенні — на ділянці й ті, що летять у неї (incoming). */
+    func relevant() -> [(threat: Threat, incoming: Bool)] {
+        guard let f = focus else { return threats.map { ($0, false) } }
+        let big = f.insetBy(dx: -f.width * 0.05, dy: -f.height * 0.05)
+        var out: [(Threat, Bool)] = []
+        for t in threats {
+            if big.contains(MapGeo.proj(t.lat, t.lon)) { out.append((t, false)); continue }
+            guard t.heading >= 0 else { continue }
+            for k in 1...24 {
+                let q = t.ahead(t.reachKm * Double(k) / 24)
+                if f.contains(MapGeo.proj(q.0, q.1)) { out.append((t, true)); break }
+            }
+        }
+        return out
+    }
     private var loading = false
 
     func activate(_ on: Bool) {

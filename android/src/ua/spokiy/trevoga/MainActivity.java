@@ -912,6 +912,9 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         map.setOnSelect(new ThreatMap.OnSelect() {
             public void selected(ThreatMap.Threat t) { showThreat(t); }
         });
+        map.setOnView(new ThreatMap.OnView() {
+            public void changed() { fillLegend(); }
+        });
         // своє місце — один рядок завжди (щоб нічого не зсувалося)
         mapMe = text("", 13, TEXT, true);
         mapMe.setSingleLine(true);
@@ -936,7 +939,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         mapSummary.setPadding(dp(8), dp(8), dp(8), 0);
         tnum(mapSummary);
         mapCard.addView(mapSummary);
-        TextView warn = text("Двома пальцями — масштаб, торкніться значка — подробиці. Положення цілей приблизні й можуть "
+        TextView warn = text("Двома пальцями — масштаб; торкніться значка — маршрут і подробиці; у наближенні внизу лише цілі цієї ділянки й ті, що летять у неї. Положення цілей приблизні й можуть "
                 + "запізнюватися; частина цілей може не з'явитися. Порожня карта не означає, що небезпеки немає — "
                 + "орієнтуйтеся на тривогу. Цілі: NEPTUN · міста: GeoNames.", 12, MUTED, false);
         warn.setPadding(dp(8), dp(6), dp(8), 0);
@@ -1086,7 +1089,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
                         mapLoading = false;
                         updateMe();
                         if (fst != null) map.setAlerts(fst);
-                        if (fth != null) { map.setThreats(fth); mapAt = System.currentTimeMillis(); mapErr = null; fillLegend(fth); }
+                        if (fth != null) { mapAt = System.currentTimeMillis(); mapErr = null; map.setThreats(fth); fillLegend(); }
                         else mapErr = ferr;
                         updateMapSummary();
                     }
@@ -1095,14 +1098,40 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         }).start();
     }
 
-    private void fillLegend(List<ThreatMap.Threat> th) {
+    private String legendSig = "";
+
+    /** Підсумок під картою: на всій карті — усі цілі; у наближенні — лише цієї ділянки й ті, що летять у неї. */
+    private void fillLegend() {
+        if (!map.hasGeo() && mapAt == 0) return;
+        boolean zoomed = map.zoomed();
+        List<ThreatMap.Threat> th = map.relevant();
         int[] n = new int[6];
-        for (ThreatMap.Threat t : th) n[ThreatMap.kind(t)] += t.count;
+        int incoming = 0;
+        for (ThreatMap.Threat t : th) { n[ThreatMap.kind(t)] += t.count; if (t.incoming) incoming += t.count; }
+        StringBuilder sig = new StringBuilder(zoomed ? "z" : "a");
+        for (int x : n) sig.append(',').append(x);
+        sig.append(',').append(incoming).append(mapAt == 0 ? "l" : "");
+        if (sig.toString().equals(legendSig)) return;   // без змін — не перебудовуємо (жест іде плавно)
+        legendSig = sig.toString();
         int[] cols = {ThreatMap.C_BALLISTIC, ThreatMap.C_MISSILE, ThreatMap.C_KAB, ThreatMap.C_UAV, ThreatMap.C_FPV, ThreatMap.C_AIR};
         legend.removeAllViews();
+        if (mapAt == 0) { addLegend(legendChip(MUTED, "Завантажую цілі…")); return; }
+        if (zoomed) addLegend(scopeChip());
         for (int k : new int[]{3, 1, 0, 2, 4, 5})
             if (n[k] > 0) addLegend(legendChip(cols[k], ThreatMap.kindTitle(k) + ": " + n[k]));
-        if (legend.getChildCount() == 0) addLegend(legendChip(GREEN, "Цілей на карті немає"));
+        if (incoming > 0) addLegend(legendChip(PRIMARY, "летять сюди: " + incoming));
+        if (th.isEmpty()) addLegend(legendChip(GREEN, zoomed ? "Поруч цілей немає" : "Цілей на карті немає"));
+    }
+
+    /** Позначка «лише ця ділянка» — для певності, що підсумок не по всій країні. */
+    private TextView scopeChip() {
+        TextView t = text("Ця ділянка", 12, ON_TONAL, true);
+        t.setPadding(dp(10), dp(4), dp(10), dp(4));
+        GradientDrawable g = new GradientDrawable();
+        g.setCornerRadius(dp(8));
+        g.setColor(TONAL);
+        t.setBackground(g);
+        return t;
     }
 
     private void addLegend(View v) {

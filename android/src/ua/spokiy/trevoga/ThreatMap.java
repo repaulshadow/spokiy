@@ -32,9 +32,11 @@ public class ThreatMap extends View {
         int heading = -1, count = 1;
         double uncKm;
         double[] trail = new double[0];
+        boolean incoming;   // поза видимою ділянкою, але курс веде в неї
     }
 
     interface OnSelect { void selected(Threat t); }
+    interface OnView { void changed(); }
 
     /** Міста (res/raw/cities.json, GeoNames): назва, координати, населення, статус (2 — столиця, 1 — обласний центр). */
     static final class Cities {
@@ -88,6 +90,7 @@ public class ThreatMap extends View {
     private final List<RectF> placed = new ArrayList<RectF>();
     private final Paint cityText = new Paint(Paint.ANTI_ALIAS_FLAG), cityHalo = new Paint(Paint.ANTI_ALIAS_FLAG), dot = new Paint(Paint.ANTI_ALIAS_FLAG);
     private OnSelect onSelect;
+    private OnView onView;
 
     private final Matrix base = new Matrix();     // вписати Україну у вигляд
     private float zoom = 1f, panX = 0f, panY = 0f;
@@ -130,10 +133,10 @@ public class ThreatMap extends View {
         gestures = new GestureDetector(c, new GestureDetector.SimpleOnGestureListener() {
             @Override public boolean onDown(MotionEvent e) { return true; }
             @Override public boolean onScroll(MotionEvent a, MotionEvent b, float dx, float dy) {
-                panX -= dx; panY -= dy; clamp(); invalidate(); return true;
+                panX -= dx; panY -= dy; clamp(); invalidate(); viewChanged(); return true;
             }
             @Override public boolean onDoubleTap(MotionEvent e) {
-                if (zoom > 6f) { zoom = 1f; panX = 0; panY = 0; invalidate(); } else zoomAt(2.2f, e.getX(), e.getY());
+                if (zoom > 6f) { zoom = 1f; panX = 0; panY = 0; invalidate(); viewChanged(); } else zoomAt(2.2f, e.getX(), e.getY());
                 return true;
             }
             @Override public boolean onSingleTapConfirmed(MotionEvent e) { pick(e.getX(), e.getY()); return true; }
@@ -147,6 +150,56 @@ public class ThreatMap extends View {
     }
 
     void setOnSelect(OnSelect s) { onSelect = s; }
+    void setOnView(OnView v) { onView = v; }
+
+    private void viewChanged() { if (onView != null) onView.changed(); }
+
+    /** Карту наближено — тоді внизу показуємо лише цілі цієї ділянки. */
+    boolean zoomed() { return zoom > 1.3f; }
+
+    /** Орієнтовна дальність прогнозу курсу (км): куди ціль може долетіти найближчим часом. */
+    static double reachKm(Threat t) {
+        switch (kind(t)) {
+            case 0: return 300;   // балістика
+            case 1: return 400;   // крилаті ракети ~30 хв
+            case 2: return 60;    // КАБ
+            case 3: return 120;   // БпЛА ~1 год
+            case 4: return 20;    // FPV
+            default: return 100;
+        }
+    }
+
+    /** Точка на відстані km від цілі за її курсом (наближено, для малих відстаней). */
+    static double[] ahead(Threat t, double km) {
+        double a = Math.toRadians(t.heading);
+        double lat = t.lat + km * Math.cos(a) / 111.0;
+        double lon = t.lon + km * Math.sin(a) / (111.0 * Math.cos(Math.toRadians(t.lat)));
+        return new double[]{lat, lon};
+    }
+
+    /**
+     * Цілі для підсумку внизу: на всій карті — усі; у наближенні — ті, що в межах видимої ділянки,
+     * і ті, що поза нею, але летять у неї (за курсом у межах дальності прогнозу).
+     */
+    List<Threat> relevant() {
+        if (!zoomed() || getWidth() == 0) { for (Threat t : threats) t.incoming = false; return threats; }
+        matrix();
+        float w = getWidth(), h = getHeight(), mx = w * 0.05f, my = h * 0.05f;
+        List<Threat> out = new ArrayList<Threat>();
+        for (Threat t : threats) {
+            t.incoming = false;
+            float[] p = screen(t.lat, t.lon);
+            if (p[0] >= -mx && p[0] <= w + mx && p[1] >= -my && p[1] <= h + my) { out.add(t); continue; }
+            if (t.heading < 0) continue;
+            double reach = reachKm(t);
+            for (int k = 1; k <= 24; k++) {
+                double[] q = ahead(t, reach * k / 24.0);
+                float[] s2 = screen(q[0], q[1]);
+                if (s2[0] >= 0 && s2[0] <= w && s2[1] >= 0 && s2[1] <= h) { t.incoming = true; out.add(t); break; }
+            }
+        }
+        return out;
+    }
 
     /** Межі (розбір ~0,6 МБ — у фоновому потоці, потім setGeo у потоці інтерфейсу). */
     void setGeo(GeoLookup g) {
@@ -241,6 +294,7 @@ public class ThreatMap extends View {
             if (onSelect != null) onSelect.selected(selected);
         }
         invalidate();
+        viewChanged();
     }
 
     // ---------- вигляд ----------
@@ -301,6 +355,7 @@ public class ThreatMap extends View {
         zoom = nz;
         clamp();
         invalidate();
+        viewChanged();
     }
 
     private void clamp() {
@@ -404,7 +459,7 @@ public class ThreatMap extends View {
 
         // цілі — у пікселях екрана (розмір значків не залежить від масштабу)
         float pxPerKm = s / 111f;
-        for (Threat t : threats) drawTrail(c, t);
+        if (selected != null) drawRoute(c, selected);   // маршрут — лише для вибраної цілі, щоб не захаращувати карту
         for (Threat t : threats) {
             float[] p = screen(t.lat, t.lon);
             float x = p[0], y = p[1];
@@ -494,6 +549,21 @@ public class ThreatMap extends View {
         c.drawCircle(x, y, 5 * density, dot);
     }
 
+    /** Маршрут вибраної цілі: пройдений шлях (суцільна лінія) і прогноз за курсом (пунктир, слабший). */
+    private void drawRoute(Canvas c, Threat t) {
+        drawTrail(c, t);
+        if (t.heading < 0) return;
+        float[] q0 = screen(t.lat, t.lon);
+        float x0 = q0[0], y0 = q0[1];
+        double[] e = ahead(t, reachKm(t));
+        float[] q1 = screen(e[0], e[1]);
+        course.setColor((color(t) & 0x00FFFFFF) | 0x99000000);
+        course.setStrokeWidth(2f * density);
+        course.setPathEffect(new DashPathEffect(new float[]{7 * density, 5 * density}, 0));
+        c.drawLine(x0, y0, q1[0], q1[1], course);
+        course.setPathEffect(null);
+    }
+
     private void drawTrail(Canvas c, Threat t) {
         if (t.trail.length < 2) return;
         Path p = new Path();
@@ -503,8 +573,8 @@ public class ThreatMap extends View {
         }
         float[] q = screen(t.lat, t.lon);
         p.lineTo(q[0], q[1]);
-        trail.setColor((color(t) & 0x00FFFFFF) | 0x80000000);
-        trail.setStrokeWidth(2f * density);
+        trail.setColor((color(t) & 0x00FFFFFF) | 0xCC000000);
+        trail.setStrokeWidth(3f * density);
         c.drawPath(p, trail);
     }
 

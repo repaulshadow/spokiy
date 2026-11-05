@@ -112,16 +112,26 @@ struct ContentView: View {
             MapView()
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
-                    let counts = Dictionary(grouping: map.threats, by: { $0.kind }).mapValues { $0.reduce(0) { $0 + $1.count } }
+                    let rel = map.relevant()
+                    let counts = Dictionary(grouping: rel, by: { $0.threat.kind }).mapValues { $0.reduce(0) { $0 + $1.threat.count } }
+                    let incoming = rel.filter { $0.incoming }.reduce(0) { $0 + $1.threat.count }
                     if map.updated == nil { chip(Palette.gray, "Завантажую цілі…") }
-                    else if counts.isEmpty { chip(Palette.green, "Цілей на карті немає") }
+                    else {
+                        if map.focus != nil {
+                            Text("Ця ділянка").font(.system(size: 11, weight: .semibold))
+                                .padding(.horizontal, 9).padding(.vertical, 4)
+                                .background(RoundedRectangle(cornerRadius: 8).fill(Color.accentColor.opacity(0.18)))
+                        }
+                        if counts.isEmpty { chip(Palette.green, map.focus != nil ? "Поруч цілей немає" : "Цілей на карті немає") }
+                    }
                     ForEach([Threat.Kind.uav, .missile, .ballistic, .kab, .fpv, .other], id: \.rawValue) { k in
                         if let n = counts[k] { chip(Color(rgb: k.rgb), "\(k.title): \(n)") }
                     }
+                    if incoming > 0 { chip(Color.accentColor, "летять сюди: \(incoming)") }
                 }
             }.frame(height: 26)
             Text(mapStatus).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1).monospacedDigit()
-            Text("Положення цілей приблизні й можуть запізнюватися; частина цілей може не з'явитися. Порожня карта не означає, що небезпеки немає — орієнтуйтеся на тривогу. Цілі: NEPTUN · міста: GeoNames.")
+            Text("Клік по значку — маршрут і подробиці; у наближенні внизу лише цілі цієї ділянки й ті, що летять у неї. Положення цілей приблизні й можуть запізнюватися; частина цілей може не з'явитися. Порожня карта не означає, що небезпеки немає — орієнтуйтеся на тривогу. Цілі: NEPTUN · міста: GeoNames.")
                 .font(.system(size: 11)).foregroundColor(.secondary).fixedSize(horizontal: false, vertical: true)
         }
         .padding(10)
