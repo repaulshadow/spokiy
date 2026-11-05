@@ -469,6 +469,10 @@ def report():
     if summ:
         with open(summ, "a", encoding="utf-8") as f: f.write("## Наскрізний тест Trevoga.exe\n\n" + "\n".join(lines) + "\n")
     print(f"\nПройдено {sum(1 for r in results if r[1])} з {len(results)}")
+    if not ok and os.path.exists(LOG):   # журнал програми — у вивід (файли збірки завантажити не завжди можна)
+        print("::group::trevoga.log (останні 250 рядків)")
+        for ln in log_lines()[-250:]: print("log:", ln)
+        print("::endgroup::")
     shutil.copy(LOG, os.path.join(os.path.dirname(WORK), "e2e-trevoga.log")) if os.path.exists(LOG) else None
     return ok
 
