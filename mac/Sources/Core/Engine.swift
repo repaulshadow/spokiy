@@ -9,6 +9,7 @@ final class Engine {
     var lastRootAt = 0
     var lastServerError: String?
     private var uaSeenAt = 0
+    private var uaLast: JObj?
     private var prevUa: AlertState = .unknown
     private var uaClearedAt = 0
     private var placeKey = ""
@@ -23,11 +24,12 @@ final class Engine {
         var root: JObj = [:]
         let rootFresh = lastRoot != nil && now - lastRootAt < Engine.rootFreshMs
         if rootFresh, let lr = lastRoot { root = lr }
-        if let ua = ua { root["ua"] = ua; uaSeenAt = now }
-        else if root["ua"] is JObj {
-            // потік уже показав новіші дані, ніж ця відповідь сервера, — старі дані сервера про UA не беремо
-            if lastRootAt < uaSeenAt { root.removeValue(forKey: "ua") } else { uaSeenAt = lastRootAt }
-        }
+        if let ua = ua { root["ua"] = ua; uaSeenAt = now; uaLast = ua }
+        else if lastRootAt < uaSeenAt {
+            // потік обірвався, а його дані новіші за відповідь сервера: беремо останні дані потоку (до 90 с) —
+            // інакше лишились би лише інші джерела, і міг би прозвучати хибний відбій, а потім сирена знову
+            if let l = uaLast, now - uaSeenAt < Engine.rootFreshMs { root["ua"] = l } else { root.removeValue(forKey: "ua") }
+        } else if root["ua"] is JObj { uaSeenAt = lastRootAt }
         let uaKnown = root["ua"] is JObj
         if root["air"] == nil && !(root["neptun"] is JObj) && !uaKnown { return nil }
 

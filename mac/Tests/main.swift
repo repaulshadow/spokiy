@@ -132,6 +132,15 @@ do {
     let e3 = Engine()
     e3.serverOk(Root().nep(OD, ODR, "red", T0).build(), t0)
     check(try! e3.compute(nil, OD, u, false, t0 + 100_000) == nil, "Engine: застарілий сервер — немає даних")
+    let e4 = Engine()
+    e4.serverOk(Root().ua().build(), t0)
+    x = try! e4.compute(uaAlert, OD, u, false, t0 + 1000)!
+    eq(AlertState.alert, x.state, "Engine: обрив — тривога з потоку")
+    x = try! e4.compute(nil, OD, u, false, t0 + 5000)!
+    eq(AlertState.alert, x.state, "Engine: обрив потоку — без хибного відбою")
+    e4.serverOk(Root().ua().build(), t0 + 6000)
+    x = try! e4.compute(nil, OD, u, false, t0 + 6000)!
+    eq(AlertState.clear, x.state, "Engine: новіша відповідь сервера — їй віримо")
 }
 
 // decide

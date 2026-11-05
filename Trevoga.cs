@@ -23,7 +23,7 @@ using System.Windows.Forms;
 using Microsoft.Win32;
 
 [assembly: System.Reflection.AssemblyTitle("Trevoga")]
-[assembly: System.Reflection.AssemblyVersion("3.5.0.0")]
+[assembly: System.Reflection.AssemblyVersion("3.5.1.0")]
 
 namespace Trevoga
 {
@@ -2511,6 +2511,7 @@ namespace Trevoga
         AlertState prevNep = AlertState.Unknown;
         DateTime? nepClearedAt;
         DateTime nepSeenAt = DateTime.MinValue, uaSeenAt = DateTime.MinValue;   // час найсвіжіших даних кожного джерела
+        Dictionary<string, object> nepLast, uaLast;   // останні дані потоків — на випадок обриву
         AlertState prevUa = AlertState.Unknown;      // UkraineAlarm: попередній стан і час офіційного відбою
         DateTime? uaClearedAt;
 
@@ -2564,18 +2565,22 @@ namespace Trevoga
             bool rootFresh = lastRoot != null && (DateTime.UtcNow - lastRootAt).TotalSeconds < 90;
             if (rootFresh) foreach (KeyValuePair<string, object> kv in lastRoot) root[kv.Key] = kv.Value;
             // Не змішуємо свіже зі старим: якщо потік уже показав новіші дані, ніж остання відповідь сервера,
-            // а тепер потоку немає — старі дані сервера про це джерело не беремо, доки не прийде новіша відповідь
+            // а тепер потоку немає — беремо останні дані самого потоку (до 90 с), а не старі дані сервера.
+            // Інакше обрив потоку посеред тривоги лишав би лише alerts.in.ua — і, якщо той ще не показав тривогу,
+            // звучав би хибний відбій, а після відновлення — сирена знову.
             DateTime nowU = DateTime.UtcNow;
-            if (nep != null) { root["neptun"] = nep; nepSeenAt = nowU; }
-            else if (root.ContainsKey("neptun"))
+            if (nep != null) { root["neptun"] = nep; nepSeenAt = nowU; nepLast = nep; }
+            else if (lastRootAt < nepSeenAt)
             {
-                if (lastRootAt < nepSeenAt) root.Remove("neptun"); else nepSeenAt = lastRootAt;
+                if (nepLast != null && (nowU - nepSeenAt).TotalSeconds < 90) root["neptun"] = nepLast; else root.Remove("neptun");
             }
-            if (ua != null) { root["ua"] = ua; uaSeenAt = nowU; }
-            else if (root.ContainsKey("ua") && root["ua"] is Dictionary<string, object>)
+            else if (root.ContainsKey("neptun")) nepSeenAt = lastRootAt;
+            if (ua != null) { root["ua"] = ua; uaSeenAt = nowU; uaLast = ua; }
+            else if (lastRootAt < uaSeenAt)
             {
-                if (lastRootAt < uaSeenAt) root.Remove("ua"); else uaSeenAt = lastRootAt;
+                if (uaLast != null && (nowU - uaSeenAt).TotalSeconds < 90) root["ua"] = uaLast; else root.Remove("ua");
             }
+            else if (root.ContainsKey("ua") && root["ua"] is Dictionary<string, object>) uaSeenAt = lastRootAt;
             bool uaKnown = root.ContainsKey("ua") && root["ua"] is Dictionary<string, object>;
             if (!root.ContainsKey("air") && !root.ContainsKey("neptun") && !uaKnown) return;   // даних немає — дочекаємося опитування
 

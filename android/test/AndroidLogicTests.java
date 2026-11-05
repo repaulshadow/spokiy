@@ -183,6 +183,17 @@ public class AndroidLogicTests {
         Engine e3 = new Engine();
         e3.serverOk(new Root().nep(OD, ODR, "red", T0).build(), now);
         eq(null, e3.compute(null, OD, u, false, now + 100000), "Engine: застарілий сервер — немає даних");
+        // обрив потоку посеред тривоги: сервер ще не знав про тривогу (лише alerts.in.ua «тиша») —
+        // не можна давати хибний відбій; беремо останні дані потоку, доки вони свіжі (90 с)
+        Engine e4 = new Engine();
+        e4.serverOk(new Root().ua().build(), now);
+        r = e4.compute(uaAlert, OD, u, false, now + 1000);
+        eq(AlertSource.ALERT, r.state, "Engine: обрив — тривога з потоку");
+        r = e4.compute(null, OD, u, false, now + 5000);
+        eq(AlertSource.ALERT, r.state, "Engine: обрив потоку — без хибного відбою");
+        e4.serverOk(new Root().ua().build(), now + 6000);
+        r = e4.compute(null, OD, u, false, now + 6000);
+        eq(AlertSource.CLEAR, r.state, "Engine: новіша відповідь сервера — їй віримо");
     }
 
     static AlertSource.Result res(int state, String level, String... t) {

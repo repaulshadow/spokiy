@@ -15,6 +15,7 @@ final class Engine {
     long lastRootAt;                // коли отримана (мс)
     String lastServerError;
     private long uaSeenAt;          // час найсвіжіших даних UkraineAlarm, які вже використано
+    private JSONObject uaLast;      // останні дані потоку — на випадок обриву
     private int prevUa = AlertSource.UNKNOWN;
     private long uaClearedAt;       // офіційний відбій (мс), 0 — немає
     private String placeKey = "";
@@ -29,11 +30,13 @@ final class Engine {
         JSONObject root = new JSONObject();
         boolean rootFresh = lastRoot != null && now - lastRootAt < ROOT_FRESH_MS;
         if (rootFresh) for (Iterator<String> it = lastRoot.keys(); it.hasNext(); ) { String k = it.next(); root.put(k, lastRoot.get(k)); }
-        if (ua != null) { root.put("ua", ua); uaSeenAt = now; }
-        else if (root.optJSONObject("ua") != null) {
-            // потік уже показав новіші дані, ніж ця відповідь сервера, — старі дані сервера про UA не беремо
-            if (lastRootAt < uaSeenAt) root.remove("ua"); else uaSeenAt = lastRootAt;
-        }
+        if (ua != null) { root.put("ua", ua); uaSeenAt = now; uaLast = ua; }
+        else if (lastRootAt < uaSeenAt) {
+            // потік уже показав новіші дані, ніж остання відповідь сервера, а тепер обірвався: беремо останні дані
+            // самого потоку (до 90 с), а не старі дані сервера — інакше лишились би лише інші джерела, і якщо
+            // вони ще не показали тривогу, прозвучав би хибний відбій (а після відновлення — сирена знову)
+            if (uaLast != null && now - uaSeenAt < ROOT_FRESH_MS) root.put("ua", uaLast); else root.remove("ua");
+        } else if (root.optJSONObject("ua") != null) uaSeenAt = lastRootAt;
         boolean uaKnown = root.optJSONObject("ua") != null;
         if (!root.has("air") && root.optJSONObject("neptun") == null && !uaKnown) return null;
 
