@@ -27,7 +27,7 @@ import java.util.Map;
  */
 public class ThreatMap extends View {
     static final class Threat {
-        String id, type, title, place, region, quality, conf, at;
+        String id, type, title, place, region, quality, conf, at, expl = "";
         double lat, lon;
         int heading = -1, count = 1;
         double uncKm;
@@ -277,7 +277,7 @@ public class ThreatMap extends View {
             t.heading = o.isNull("h") ? -1 : o.optInt("h", -1);
             t.uncKm = o.optDouble("u", 0); if (Double.isNaN(t.uncKm)) t.uncKm = 0;
             t.quality = o.optString("q"); t.conf = o.optString("c"); t.count = Math.max(1, o.optInt("k", 1));
-            t.at = o.optString("at"); t.place = o.optString("p"); t.region = o.optString("r");
+            t.at = o.optString("at"); t.place = o.optString("p"); t.region = o.optString("r"); t.expl = o.optString("x", "");
             JSONArray tr = o.optJSONArray("tr");
             if (tr != null) { t.trail = new double[tr.length()]; for (int k = 0; k < tr.length(); k++) t.trail[k] = tr.optDouble(k); }
             out.add(t);
@@ -312,16 +312,58 @@ public class ThreatMap extends View {
         return 5;
     }
 
-    static int color(Threat t) {
-        switch (kind(t)) {
-            case 0: return C_BALLISTIC;
-            case 1: return C_MISSILE;
-            case 2: return C_KAB;
-            case 3: return C_UAV;
-            case 4: return C_FPV;
-            default: return C_AIR;
+    // ---------- різновиди цілей (для силуету й підсумку) ----------
+    static final int S_SHAHED = 0, S_GERBERA = 1, S_RECON = 2, S_CRUISE = 3, S_BALLISTIC = 4, S_MISSILE = 5, S_KAB = 6,
+            S_FPV = 7, S_LANCET = 8, S_AIRCRAFT = 9, S_OTHER = 10, S_UAV = 11, SUBS = 12;
+    static final String[] SUB_TITLE = {"Шахеди", "Гербери", "Розвідники", "Крилаті ракети", "Балістика", "Ракети", "КАБи",
+            "FPV", "Ланцети", "Авіація", "Інше", "БпЛА"};
+    static final String[] SUB_ONE = {"Шахед", "Гербера (дрон-імітатор)", "Розвідувальний БпЛА", "Крилата ракета", "Балістична ракета", "Ракета",
+            "Керована авіабомба", "FPV-дрон", "Ланцет", "Авіація", "Ціль", "БпЛА"};
+    static final int[] SUB_COLOR = {0xFF37474F, 0xFF78909C, 0xFF00796B, 0xFFD32F2F, 0xFF7B1FA2, 0xFFC62828, 0xFFEF6C00,
+            0xFF6D4C41, 0xFF455A64, 0xFF1565C0, 0xFF1565C0, 0xFF37474F};
+    /** Порядок у підсумку: найнебезпечніше — першим. */
+    static final int[] SUB_ORDER = {S_BALLISTIC, S_CRUISE, S_MISSILE, S_AIRCRAFT, S_KAB, S_SHAHED, S_UAV, S_GERBERA, S_LANCET, S_RECON, S_FPV, S_OTHER};
+
+    private static boolean any(String s, String... w) { for (String x : w) if (s.contains(x)) return true; return false; }
+
+    /**
+     * Різновид за даними NEPTUN: тип (uav/fpv/missile/kab/recon…) і назва; якщо в описі є модель
+     * (Шахед, Гербера, Х-101, Іскандер, Ланцет…) — уточнюємо. Немає уточнення — загальне «БпЛА»/«Ракета».
+     */
+    static int sub(Threat t) {
+        String s = (t.type + " " + t.title).toLowerCase(), full = s + " " + (t.expl == null ? "" : t.expl.toLowerCase());
+        if (s.contains("fpv")) return S_FPV;
+        if (any(full, "ланцет", "lancet")) return S_LANCET;
+        if (any(full, "гербер", "gerbera", "імітатор", "обманк", "decoy")) return S_GERBERA;
+        if (any(full, "шахед", "shahed", "герань", "geran")) return S_SHAHED;
+        if (any(full, "recon", "розвід", "орлан", "zala", "supercam", "суперкам")) return S_RECON;
+        if (any(s, "kab", "каб", "авіабомб", "бомб")) return S_KAB;
+        if (any(full, "баліст", "ballist", "іскандер", "iskander", "кинджал", "kinzhal", "кн-23", "kn-23")) return S_BALLISTIC;
+        if (any(full, "крилат", "cruise", "х-101", "x-101", "х-555", "калібр", "kalibr", "х-59", "х-69", "х-22", "х-32")) return S_CRUISE;
+        if (any(s, "missile", "ракет")) return S_MISSILE;
+        if (any(s, "aircraft", "літак", "авіац", "міг-", "су-3")) return S_AIRCRAFT;
+        if (any(s, "uav", "бпла", "дрон", "drone")) return S_UAV;
+        return S_OTHER;
+    }
+
+    /** Силует (індекс у Glyphs) для різновиду. */
+    static int glyph(int sub) {
+        switch (sub) {
+            case S_SHAHED: case S_UAV: return 0;
+            case S_GERBERA: return 1;
+            case S_RECON: return 2;
+            case S_CRUISE: return 3;
+            case S_BALLISTIC: return 4;
+            case S_MISSILE: return 5;
+            case S_KAB: return 6;
+            case S_FPV: return 7;
+            case S_LANCET: return 8;
+            case S_AIRCRAFT: return 9;
+            default: return 10;
         }
     }
+
+    static int color(Threat t) { return SUB_COLOR[sub(t)]; }
 
     static String kindTitle(int k) {
         switch (k) {
@@ -578,31 +620,36 @@ public class ThreatMap extends View {
         c.drawPath(p, trail);
     }
 
+    private final Matrix gm = new Matrix();
+    private final Path gp = new Path();
+
     private void drawIcon(Canvas c, Threat t, float x, float y, int col, boolean sel) {
-        float r = 9 * density;
+        float r = 11 * density;
         icon.setStyle(Paint.Style.FILL);
-        if (sel) { icon.setColor((col & 0x00FFFFFF) | 0x40000000); c.drawCircle(x, y, r * 1.9f, icon); }
+        if (sel) { icon.setColor((col & 0x00FFFFFF) | 0x40000000); c.drawCircle(x, y, r * 1.8f, icon); }
         icon.setColor(Color.WHITE);
         c.drawCircle(x, y, r + 1.6f * density, icon);
         icon.setColor(col);
         c.drawCircle(x, y, r, icon);
-        // гліф: літак-«дельта» для дронів, стріла для ракет, ромб для КАБ, крапка для решти — повернутий за курсом
-        c.save();
-        c.translate(x, y);
-        if (t.heading >= 0) c.rotate(t.heading);
+        // силует (вид згори) — повернутий за курсом; FPV-квадрокоптер не повертаємо
+        int sb = sub(t), gi = glyph(sb);
+        float sc = r * 2 * 0.8f / 24f;
+        gm.reset();
+        gm.postTranslate(-12, -12);
+        gm.postScale(sc, sc);
+        if (t.heading >= 0 && sb != S_FPV) gm.postRotate(t.heading);
+        gm.postTranslate(x, y);
+        Glyphs.get(gi).transform(gm, gp);
         icon.setColor(Color.WHITE);
-        Path g = new Path();
-        int k = kind(t);
-        float u = r * 0.62f;
-        if (k == 3) { g.moveTo(0, -u); g.lineTo(u, u * 0.7f); g.lineTo(0, u * 0.25f); g.lineTo(-u, u * 0.7f); g.close(); }
-        else if (k == 0 || k == 1) { g.moveTo(0, -u * 1.1f); g.lineTo(u * 0.45f, -u * 0.2f); g.lineTo(u * 0.25f, -u * 0.2f); g.lineTo(u * 0.25f, u);
-            g.lineTo(-u * 0.25f, u); g.lineTo(-u * 0.25f, -u * 0.2f); g.lineTo(-u * 0.45f, -u * 0.2f); g.close(); }
-        else if (k == 2) { g.moveTo(0, -u); g.lineTo(u * 0.7f, 0); g.lineTo(0, u); g.lineTo(-u * 0.7f, 0); g.close(); }
-        else g.addCircle(0, 0, u * 0.45f, Path.Direction.CW);
-        c.drawPath(g, icon);
-        c.restore();
+        c.drawPath(gp, icon);
+        if (sb == S_FPV) {
+            icon.setStyle(Paint.Style.STROKE);
+            icon.setStrokeWidth(1.3f * sc);
+            for (float[] ring : Glyphs.FPV_RINGS) c.drawCircle(x + (ring[0] - 12) * sc, y + (ring[1] - 12) * sc, ring[2] * sc, icon);
+            icon.setStyle(Paint.Style.FILL);
+        }
         if (t.count > 1) {
-            float bx = x + r * 0.9f, by = y - r * 0.9f;
+            float bx = x + r * 0.85f, by = y - r * 0.85f;
             icon.setColor(Color.WHITE);
             c.drawCircle(bx, by, 7 * density, icon);
             icon.setColor(col);

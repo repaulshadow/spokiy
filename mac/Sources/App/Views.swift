@@ -113,7 +113,7 @@ struct ContentView: View {
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     let rel = map.relevant()
-                    let counts = Dictionary(grouping: rel, by: { $0.threat.kind }).mapValues { $0.reduce(0) { $0 + $1.threat.count } }
+                    let counts = Dictionary(grouping: rel, by: { $0.threat.sub }).mapValues { $0.reduce(0) { $0 + $1.threat.count } }
                     let incoming = rel.filter { $0.incoming }.reduce(0) { $0 + $1.threat.count }
                     if map.updated == nil { chip(Palette.gray, "Завантажую цілі…") }
                     else {
@@ -124,7 +124,7 @@ struct ContentView: View {
                         }
                         if counts.isEmpty { chip(Palette.green, map.focus != nil ? "Поруч цілей немає" : "Цілей на карті немає") }
                     }
-                    ForEach([Threat.Kind.uav, .missile, .ballistic, .kab, .fpv, .other], id: \.rawValue) { k in
+                    ForEach(Sub.order, id: \.rawValue) { k in
                         if let n = counts[k] { chip(Color(rgb: k.rgb), "\(k.title): \(n)") }
                     }
                     if incoming > 0 { chip(Color.accentColor, "летять сюди: \(incoming)") }

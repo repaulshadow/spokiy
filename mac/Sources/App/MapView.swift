@@ -203,52 +203,50 @@ struct MapView: View {
                 var p = Path()
                 for (i, q) in t.trail.enumerated() { let s = x.ll(q.0, q.1); if i == 0 { p.move(to: s) } else { p.addLine(to: s) } }
                 p.addLine(to: x.ll(t.lat, t.lon))
-                ctx.stroke(p, with: .color(Color(rgb: t.kind.rgb, 0.8)), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
+                ctx.stroke(p, with: .color(Color(rgb: t.sub.rgb, 0.8)), style: StrokeStyle(lineWidth: 3, lineCap: .round, lineJoin: .round))
             }
             if t.heading >= 0 {
                 let e = t.ahead(t.reachKm)
                 var p = Path(); p.move(to: x.ll(t.lat, t.lon)); p.addLine(to: x.ll(e.0, e.1))
-                ctx.stroke(p, with: .color(Color(rgb: t.kind.rgb, 0.6)), style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [7, 5]))
+                ctx.stroke(p, with: .color(Color(rgb: t.sub.rgb, 0.6)), style: StrokeStyle(lineWidth: 2, lineCap: .round, dash: [7, 5]))
             }
         }
         for t in model.threats {
             let c = x.ll(t.lat, t.lon)
-            let col = Color(rgb: t.kind.rgb)
+            let col = Color(rgb: t.sub.rgb)
             let r = CGFloat(t.uncKm) * pxPerKm
             if r > 10 && r < 3 * max(size.width, size.height) {
-                ctx.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r)), with: .color(Color(rgb: t.kind.rgb, 0.12)))
+                ctx.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r)), with: .color(Color(rgb: t.sub.rgb, 0.12)))
             }
             if t.heading >= 0 {
                 let a = Double(t.heading) * .pi / 180
                 var p = Path(); p.move(to: c); p.addLine(to: CGPoint(x: c.x + sin(a) * 26, y: c.y - cos(a) * 26))
-                ctx.stroke(p, with: .color(Color(rgb: t.kind.rgb, 0.7)), style: StrokeStyle(lineWidth: 1.6, lineCap: .round, dash: [4, 3]))
+                ctx.stroke(p, with: .color(Color(rgb: t.sub.rgb, 0.7)), style: StrokeStyle(lineWidth: 1.6, lineCap: .round, dash: [4, 3]))
             }
             icon(&ctx, t, c, col)
         }
     }
 
     private func icon(_ ctx: inout GraphicsContext, _ t: Threat, _ c: CGPoint, _ col: Color) {
-        let r: CGFloat = 9
-        if t.id == selected { ctx.fill(Path(ellipseIn: CGRect(x: c.x - r * 1.9, y: c.y - r * 1.9, width: r * 3.8, height: r * 3.8)), with: .color(col.opacity(0.25))) }
+        let r: CGFloat = 11
+        if t.id == selected { ctx.fill(Path(ellipseIn: CGRect(x: c.x - r * 1.8, y: c.y - r * 1.8, width: r * 3.6, height: r * 3.6)), with: .color(col.opacity(0.25))) }
         ctx.fill(Path(ellipseIn: CGRect(x: c.x - r - 1.6, y: c.y - r - 1.6, width: 2 * r + 3.2, height: 2 * r + 3.2)), with: .color(.white))
         ctx.fill(Path(ellipseIn: CGRect(x: c.x - r, y: c.y - r, width: 2 * r, height: 2 * r)), with: .color(col))
-        let u = r * 0.62
-        var g = Path()
-        switch t.kind {
-        case .uav:
-            g.move(to: CGPoint(x: 0, y: -u)); g.addLine(to: CGPoint(x: u, y: u * 0.7)); g.addLine(to: CGPoint(x: 0, y: u * 0.25)); g.addLine(to: CGPoint(x: -u, y: u * 0.7)); g.closeSubpath()
-        case .ballistic, .missile:
-            g.addLines([CGPoint(x: 0, y: -u * 1.1), CGPoint(x: u * 0.45, y: -u * 0.2), CGPoint(x: u * 0.25, y: -u * 0.2), CGPoint(x: u * 0.25, y: u),
-                        CGPoint(x: -u * 0.25, y: u), CGPoint(x: -u * 0.25, y: -u * 0.2), CGPoint(x: -u * 0.45, y: -u * 0.2)]); g.closeSubpath()
-        case .kab:
-            g.addLines([CGPoint(x: 0, y: -u), CGPoint(x: u * 0.7, y: 0), CGPoint(x: 0, y: u), CGPoint(x: -u * 0.7, y: 0)]); g.closeSubpath()
-        default:
-            g.addEllipse(in: CGRect(x: -u * 0.45, y: -u * 0.45, width: u * 0.9, height: u * 0.9))
+        // силует (вид згори), повернутий за курсом; FPV не повертаємо
+        let sb = t.sub
+        let sc = r * 2 * 0.8 / 24
+        var m = CGAffineTransform(translationX: -12, y: -12).concatenating(CGAffineTransform(scaleX: sc, y: sc))
+        if t.heading >= 0 && sb != .fpv { m = m.concatenating(CGAffineTransform(rotationAngle: CGFloat(t.heading) * .pi / 180)) }
+        m = m.concatenating(CGAffineTransform(translationX: c.x, y: c.y))
+        ctx.fill(Glyphs.parsed[sb.glyph].applying(m), with: .color(.white))
+        if sb == .fpv {
+            for (rx, ry, rr) in Glyphs.fpvRings {
+                let cx = c.x + (rx - 12) * sc, cy = c.y + (ry - 12) * sc, q = rr * sc
+                ctx.stroke(Path(ellipseIn: CGRect(x: cx - q, y: cy - q, width: 2 * q, height: 2 * q)), with: .color(.white), lineWidth: 1.3 * sc)
+            }
         }
-        let rot = t.heading >= 0 ? CGAffineTransform(rotationAngle: CGFloat(t.heading) * .pi / 180) : .identity
-        ctx.fill(g.applying(rot.concatenating(CGAffineTransform(translationX: c.x, y: c.y))), with: .color(.white))
         if t.count > 1 {
-            let b = CGPoint(x: c.x + r * 0.9, y: c.y - r * 0.9)
+            let b = CGPoint(x: c.x + r * 0.85, y: c.y - r * 0.85)
             ctx.fill(Path(ellipseIn: CGRect(x: b.x - 7, y: b.y - 7, width: 14, height: 14)), with: .color(.white))
             ctx.fill(Path(ellipseIn: CGRect(x: b.x - 6, y: b.y - 6, width: 12, height: 12)), with: .color(col))
             ctx.draw(Text("\(t.count)").font(.system(size: 8.5, weight: .bold)).foregroundColor(.white), at: b)
@@ -288,7 +286,7 @@ struct ThreatInfo: View {
     let t: Threat
     var body: some View {
         VStack(alignment: .leading, spacing: 2) {
-            Text((t.title.isEmpty ? t.kind.title : t.title) + (t.count > 1 ? " ×\(t.count)" : "") + " — " + [t.place, t.region].filter { !$0.isEmpty }.joined(separator: ", "))
+            Text(([.uav, .missile, .other].contains(t.sub) ? (t.title.isEmpty ? t.sub.one : t.title) : t.sub.one) + (t.count > 1 ? " ×\(t.count)" : "") + " — " + [t.place, t.region].filter { !$0.isEmpty }.joined(separator: ", "))
                 .font(.system(size: 12, weight: .semibold)).lineLimit(1)
             Text(details).font(.system(size: 11)).foregroundColor(.secondary).lineLimit(1)
         }

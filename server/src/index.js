@@ -76,6 +76,7 @@ function trimThreats(j) {
         h: typeof x.heading === "number" ? Math.round(x.heading) : null, u: typeof x.uncertaintyKm === "number" ? x.uncertaintyKm : null,
         q: x.positionQuality || "", c: x.displayConfidence || x.confidenceLevel || "", k: typeof x.count === "number" ? x.count : 1,
         at: x.updatedAt || null, p: String(x.locality || ""), r: String(x.region || ""), tr,
+        x: String(x.explanationShort || "").slice(0, 160),
       };
     });
   return { ok: true, at: (j && j.serverTime) || new Date().toISOString(), items };

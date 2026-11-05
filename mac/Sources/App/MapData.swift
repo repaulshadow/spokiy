@@ -60,6 +60,7 @@ struct Threat: Identifiable, Equatable {
     let id: String, type: String, title: String, place: String, region: String, quality: String, at: String
     let lat: Double, lon: Double, heading: Int, uncKm: Double, count: Int
     let trail: [(Double, Double)]
+    var expl = ""
     static func == (a: Threat, b: Threat) -> Bool { a.id == b.id && a.lat == b.lat && a.lon == b.lon && a.count == b.count }
 
     enum Kind: Int, CaseIterable { case ballistic, missile, kab, uav, fpv, other }
@@ -83,12 +84,40 @@ struct Threat: Identifiable, Equatable {
             return Threat(id: jstr(o, "id"), type: jstr(o, "t"), title: jstr(o, "n"), place: jstr(o, "p"), region: jstr(o, "r"),
                           quality: jstr(o, "q"), at: jstr(o, "at"), lat: la, lon: lo,
                           heading: (o["h"] as? NSNumber)?.intValue ?? -1, uncKm: (o["u"] as? NSNumber)?.doubleValue ?? 0,
-                          count: max(1, (o["k"] as? NSNumber)?.intValue ?? 1), trail: tr)
+                          count: max(1, (o["k"] as? NSNumber)?.intValue ?? 1), trail: tr, expl: jstr(o, "x"))
         }
     }
 }
 
+/** Різновид цілі — для силуету, кольору й підсумку (як в Android-версії). */
+enum Sub: Int, CaseIterable {
+    case shahed, gerbera, recon, cruise, ballistic, missile, kab, fpv, lancet, aircraft, other, uav
+    var title: String { ["Шахеди", "Гербери", "Розвідники", "Крилаті ракети", "Балістика", "Ракети", "КАБи", "FPV", "Ланцети", "Авіація", "Інше", "БпЛА"][rawValue] }
+    var one: String { ["Шахед", "Гербера (дрон-імітатор)", "Розвідувальний БпЛА", "Крилата ракета", "Балістична ракета", "Ракета", "Керована авіабомба",
+                       "FPV-дрон", "Ланцет", "Авіація", "Ціль", "БпЛА"][rawValue] }
+    var rgb: UInt32 { [0x37474F, 0x78909C, 0x00796B, 0xD32F2F, 0x7B1FA2, 0xC62828, 0xEF6C00, 0x6D4C41, 0x455A64, 0x1565C0, 0x1565C0, 0x37474F][rawValue] }
+    var glyph: Int { self == .uav ? 0 : self == .other ? 10 : rawValue }
+    static let order: [Sub] = [.ballistic, .cruise, .missile, .aircraft, .kab, .shahed, .uav, .gerbera, .lancet, .recon, .fpv, .other]
+}
+
 extension Threat {
+    var sub: Sub {
+        let s = (type + " " + title).lowercased(), full = s + " " + expl.lowercased()
+        func any(_ x: String, _ w: [String]) -> Bool { w.contains { x.contains($0) } }
+        if s.contains("fpv") { return .fpv }
+        if any(full, ["ланцет", "lancet"]) { return .lancet }
+        if any(full, ["гербер", "gerbera", "імітатор", "обманк", "decoy"]) { return .gerbera }
+        if any(full, ["шахед", "shahed", "герань", "geran"]) { return .shahed }
+        if any(full, ["recon", "розвід", "орлан", "zala", "supercam", "суперкам"]) { return .recon }
+        if any(s, ["kab", "каб", "авіабомб", "бомб"]) { return .kab }
+        if any(full, ["баліст", "ballist", "іскандер", "iskander", "кинджал", "kinzhal", "кн-23", "kn-23"]) { return .ballistic }
+        if any(full, ["крилат", "cruise", "х-101", "x-101", "х-555", "калібр", "kalibr", "х-59", "х-69", "х-22", "х-32"]) { return .cruise }
+        if any(s, ["missile", "ракет"]) { return .missile }
+        if any(s, ["aircraft", "літак", "авіац", "міг-", "су-3"]) { return .aircraft }
+        if any(s, ["uav", "бпла", "дрон", "drone"]) { return .uav }
+        return .other
+    }
+
     /** Орієнтовна дальність прогнозу курсу (км). */
     var reachKm: Double {
         switch kind { case .ballistic: return 300; case .missile: return 400; case .kab: return 60; case .uav: return 120; case .fpv: return 20; case .other: return 100 }

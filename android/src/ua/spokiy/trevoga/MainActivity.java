@@ -1004,7 +1004,8 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         if (t == null) { mapInfo.setVisibility(View.GONE); return; }
         mapInfo.setVisibility(View.VISIBLE);
         StringBuilder b = new StringBuilder();
-        b.append(t.title.length() > 0 ? t.title : ThreatMap.kindTitle(ThreatMap.kind(t)));
+        int sb = ThreatMap.sub(t);
+        b.append(sb == ThreatMap.S_UAV || sb == ThreatMap.S_MISSILE || sb == ThreatMap.S_OTHER ? (t.title.length() > 0 ? t.title : ThreatMap.SUB_ONE[sb]) : ThreatMap.SUB_ONE[sb]);
         if (t.count > 1) b.append(" ×").append(t.count);
         b.append(" — ").append(t.place.length() > 0 ? t.place : "").append(t.region.length() > 0 ? (t.place.length() > 0 ? ", " : "") + t.region : "");
         if (t.heading >= 0) b.append("\nКурс: ").append(compass(t.heading)).append(" (").append(t.heading).append("°)");
@@ -1105,20 +1106,19 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         if (!map.hasGeo() && mapAt == 0) return;
         boolean zoomed = map.zoomed();
         List<ThreatMap.Threat> th = map.relevant();
-        int[] n = new int[6];
+        int[] n = new int[ThreatMap.SUBS];
         int incoming = 0;
-        for (ThreatMap.Threat t : th) { n[ThreatMap.kind(t)] += t.count; if (t.incoming) incoming += t.count; }
+        for (ThreatMap.Threat t : th) { n[ThreatMap.sub(t)] += t.count; if (t.incoming) incoming += t.count; }
         StringBuilder sig = new StringBuilder(zoomed ? "z" : "a");
         for (int x : n) sig.append(',').append(x);
         sig.append(',').append(incoming).append(mapAt == 0 ? "l" : "");
         if (sig.toString().equals(legendSig)) return;   // без змін — не перебудовуємо (жест іде плавно)
         legendSig = sig.toString();
-        int[] cols = {ThreatMap.C_BALLISTIC, ThreatMap.C_MISSILE, ThreatMap.C_KAB, ThreatMap.C_UAV, ThreatMap.C_FPV, ThreatMap.C_AIR};
         legend.removeAllViews();
         if (mapAt == 0) { addLegend(legendChip(MUTED, "Завантажую цілі…")); return; }
         if (zoomed) addLegend(scopeChip());
-        for (int k : new int[]{3, 1, 0, 2, 4, 5})
-            if (n[k] > 0) addLegend(legendChip(cols[k], ThreatMap.kindTitle(k) + ": " + n[k]));
+        for (int k : ThreatMap.SUB_ORDER)
+            if (n[k] > 0) addLegend(legendChip(ThreatMap.SUB_COLOR[k], ThreatMap.SUB_TITLE[k] + ": " + n[k]));
         if (incoming > 0) addLegend(legendChip(PRIMARY, "летять сюди: " + incoming));
         if (th.isEmpty()) addLegend(legendChip(GREEN, zoomed ? "Поруч цілей немає" : "Цілей на карті немає"));
     }
