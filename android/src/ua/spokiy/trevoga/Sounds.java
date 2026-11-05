@@ -34,6 +34,7 @@ final class Sounds {
     /** Только основной звук (сирена/отбой или свой файл), без голоса. */
     static synchronized void play(Context ctx, boolean alarm) {
         stop();
+        buzz(ctx, alarm ? BUZZ_ALERT : BUZZ_CLEAR);
         mainSound(ctx, alarm);
     }
 
@@ -46,6 +47,7 @@ final class Sounds {
         int n = 0;
         for (String t : threats) if (n++ < 4) k.add(t);
         k.add("shelter");
+        buzz(ctx, BUZZ_ALERT);   // одразу, ще до голосу
         sequence(ctx, k, ALARM);
     }
 
@@ -55,6 +57,7 @@ final class Sounds {
         int n = 0;
         for (String t : threats) if (!t.equals("ballistic_missiles") && n++ < 3) k.add(t);
         k.add("now");
+        buzz(ctx, BUZZ_BALLISTIC);
         sequence(ctx, k, BALLISTIC);
     }
 
@@ -65,6 +68,7 @@ final class Sounds {
     }
 
     static synchronized void clear(Context ctx) {
+        buzz(ctx, BUZZ_CLEAR);
         sequence(ctx, list("clear"), CLEAR);
     }
 
@@ -183,11 +187,26 @@ final class Sounds {
             mp.start();
             player = mp;
         } catch (Exception ignored) { }
+    }
+
+    static final int BUZZ_CLEAR = 0, BUZZ_ALERT = 1, BUZZ_BALLISTIC = 2;
+
+    /**
+     * Одинарна вібрація: відбій — легка й коротка, тривога — одна середня, балістика — одна сильна й довша.
+     * Сила — там, де телефон уміє регулювати (Android 8+), інакше лише тривалість.
+     */
+    @SuppressWarnings("deprecation")
+    static void buzz(Context ctx, int kind) {
+        long ms = kind == BUZZ_CLEAR ? 70 : kind == BUZZ_ALERT ? 280 : 550;
+        int amp = kind == BUZZ_CLEAR ? 70 : kind == BUZZ_ALERT ? 170 : 255;
         try {
             Vibrator v = (Vibrator) ctx.getSystemService(Context.VIBRATOR_SERVICE);
-            if (v != null) {
-                if (alarm) v.vibrate(new long[]{0, 800, 400, 800, 400, 800, 400, 800}, -1);
-                else v.vibrate(new long[]{0, 300, 200, 300}, -1);
+            if (v == null || !v.hasVibrator()) return;
+            if (android.os.Build.VERSION.SDK_INT >= 26) {
+                android.os.VibrationEffect e = android.os.VibrationEffect.createOneShot(ms, v.hasAmplitudeControl() ? amp : android.os.VibrationEffect.DEFAULT_AMPLITUDE);
+                v.vibrate(e, new android.media.AudioAttributes.Builder().setUsage(android.media.AudioAttributes.USAGE_ALARM).build());
+            } else {
+                v.vibrate(kind == BUZZ_CLEAR ? 40 : ms);
             }
         } catch (Exception ignored) { }
     }
@@ -195,6 +214,7 @@ final class Sounds {
     /** Срочный сигнал «Балістика»: частые чередующиеся высокие тона (~8 сек). */
     static synchronized void playBallistic(Context ctx) {
         stop();
+        buzz(ctx, BUZZ_BALLISTIC);
         mainBallistic(ctx);
     }
 
@@ -211,10 +231,6 @@ final class Sounds {
             });
             mp.start();
             player = mp;
-        } catch (Exception ignored) { }
-        try {
-            Vibrator v = (Vibrator) ctx.getSystemService(Context.VIBRATOR_SERVICE);
-            if (v != null) v.vibrate(new long[]{0, 150, 100, 150, 100, 150, 100, 150, 100, 150, 100, 150, 400, 1000}, -1);
         } catch (Exception ignored) { }
     }
 

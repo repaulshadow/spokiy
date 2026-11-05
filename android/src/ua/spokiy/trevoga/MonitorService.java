@@ -400,7 +400,7 @@ public class MonitorService extends Service {
         s.cardUntil = test ? System.currentTimeMillis() + 60000L : alert ? Long.MAX_VALUE : System.currentTimeMillis() + 10 * 60000L;
         s.postCard(title, text, color, quiet, false);
         ((NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE)).cancel(NOTIF_ALERT);
-        if (quiet) vibrate(ctx);
+        if (quiet) vibrate(ctx, color);
     }
 
     @SuppressWarnings("deprecation")
@@ -425,12 +425,9 @@ public class MonitorService extends Service {
         postStatus(b.build());
     }
 
-    private static void vibrate(Context ctx) {
-        // без звуку, лише коротка вібрація, щоб сповіщення помітили
-        try {
-            android.os.Vibrator v = (android.os.Vibrator) ctx.getSystemService(VIBRATOR_SERVICE);
-            if (v != null) v.vibrate(new long[]{0, 250, 150, 250}, -1);
-        } catch (Exception ignored) { }
+    /** Без звуку — лише одинарна вібрація: легка на відбій, середня на тривогу, сильна на балістику. */
+    private static void vibrate(Context ctx, int color) {
+        Sounds.buzz(ctx, color == GREEN ? Sounds.BUZZ_CLEAR : color == PURPLE ? Sounds.BUZZ_BALLISTIC : Sounds.BUZZ_ALERT);
     }
 
     @SuppressWarnings("deprecation")
@@ -451,11 +448,7 @@ public class MonitorService extends Service {
                     new Intent(ctx, MonitorService.class).setAction(ACTION_STOP_SOUND), Prefs.PI);
             b.addAction(0, "Вимкнути звук", stop);
         } else {
-            // без звуку, лише коротка вібрація, щоб сповіщення помітили
-            try {
-                android.os.Vibrator v = (android.os.Vibrator) ctx.getSystemService(VIBRATOR_SERVICE);
-                if (v != null) v.vibrate(new long[]{0, 250, 150, 250}, -1);
-            } catch (Exception ignored) { }
+            vibrate(ctx, color);
         }
         ((NotificationManager) ctx.getSystemService(NOTIFICATION_SERVICE)).notify(NOTIF_ALERT, b.build());
     }
