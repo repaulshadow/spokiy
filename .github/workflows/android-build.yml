@@ -1,0 +1,24 @@
+name: Android release build
+
+# Збирає APK без підпису (свіжий Android SDK, targetSdk 35) і кладе в гілку apk-unsigned.
+# Підпис — лише на комп'ютері автора (ключ не зберігається на GitHub): android/sign_release.sh.
+on: workflow_dispatch
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "17" }
+      - run: sh android/build_ci.sh build/test.apk
+      - name: APK без підпису → гілка apk-unsigned
+        run: |
+          mkdir -p out && cp android/build/ci/aligned.apk out/Trevoga-unsigned.apk
+          "$(ls -d $ANDROID_HOME/build-tools/* | sort -V | tail -1)/aapt" dump badging out/Trevoga-unsigned.apk | head -3 | tee out/badging.txt
+          cd out && git init -q -b apk && git add -A
+          git -c user.name=ci -c user.email=ci@localhost commit -qm "unsigned apk $(head -1 badging.txt | cut -c1-120)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" apk:apk-unsigned

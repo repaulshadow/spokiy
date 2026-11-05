@@ -67,19 +67,13 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     private Spinner raionSpinner, regionSpinner;
     private Switch autoSwitch;
     private TextView autoInfo;
-    static final int REQ_LOCATION = 41;
+    static final int REQ_LOCATION = 41, REQ_NOTIF = 42;
     private Switch enabledSwitch;
     private final List<Integer> raionUids = new ArrayList<Integer>();
     private final Handler ticker = new Handler();
     private static final int PICK_ALARM = 11, PICK_CLEAR = 12;
     static boolean visible = false;
     private TextView versionInfo;
-    private final android.content.BroadcastReceiver dlDone = new android.content.BroadcastReceiver() {
-        public void onReceive(Context c, Intent i) {
-            long id = i.getLongExtra(android.app.DownloadManager.EXTRA_DOWNLOAD_ID, -1);
-            if (id == prefs.getLong(Updater.U_DL, -2)) finishUpdate(id);
-        }
-    };
 
     @Override
     protected void onCreate(Bundle b) {
@@ -238,7 +232,10 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
                 prefs.edit().putBoolean(Prefs.AUTO_PLACE, v).apply();
                 if (v) askLocation();
                 updateAutoUi();
-                if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.checkNow(MainActivity.this);
+                if (prefs.getBoolean(Prefs.ENABLED, true)) {
+                    MonitorService.start(MainActivity.this);   // тип служби «геопозиція» — поки вікно відкрите
+                    MonitorService.checkNow(MainActivity.this);
+                }
             }
         });
         where.addView(autoSwitch);
@@ -391,12 +388,24 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         credit.setLinkTextColor(PRIMARY);
         home.addView(credit);
 
+        // Android 15: вікно на весь екран — відступи під рядок стану й панель навігації
+        final int padTop = root.getPaddingTop(), padBottom = root.getPaddingBottom();
+        scroll.setOnApplyWindowInsetsListener(new View.OnApplyWindowInsetsListener() {
+            @SuppressWarnings("deprecation")
+            public android.view.WindowInsets onApplyWindowInsets(View v, android.view.WindowInsets ins) {
+                root.setPadding(root.getPaddingLeft(), padTop + ins.getSystemWindowInsetTop(), root.getPaddingRight(), padBottom + ins.getSystemWindowInsetBottom());
+                return ins;
+            }
+        });
         setContentView(scroll);
         applyMode();
         handleIntent(getIntent());
 
         if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.start(this);
-        askBattery(false);
+        // Android 13+: дозвіл на сповіщення (без нього не буде видно тривоги в шторці)
+        if (Build.VERSION.SDK_INT >= 33 && checkSelfPermission("android.permission.POST_NOTIFICATIONS") != android.content.pm.PackageManager.PERMISSION_GRANTED)
+            requestPermissions(new String[]{"android.permission.POST_NOTIFICATIONS"}, REQ_NOTIF);
+        else askBattery(false);
     }
 
     // ---------- допоміжне для інтерфейсу ----------
@@ -491,6 +500,10 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         if (!night && Build.VERSION.SDK_INT >= 23) flags |= 0x00002000;   // SYSTEM_UI_FLAG_LIGHT_STATUS_BAR
         if (!night && Build.VERSION.SDK_INT >= 27) flags |= 0x00000010;   // SYSTEM_UI_FLAG_LIGHT_NAVIGATION_BAR
         w.getDecorView().setSystemUiVisibility(flags);
+        if (Build.VERSION.SDK_INT >= 30 && w.getInsetsController() != null) {   // Android 11+: темні значки на світлому тлі
+            int light = night ? 0 : (android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+            w.getInsetsController().setSystemBarsAppearance(light, android.view.WindowInsetsController.APPEARANCE_LIGHT_STATUS_BARS | android.view.WindowInsetsController.APPEARANCE_LIGHT_NAVIGATION_BARS);
+        }
     }
 
     @SuppressWarnings("deprecation")
@@ -615,7 +628,6 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         }
         if (i.getAction() == null) return;
         if (Updater.ACTION_UPDATE.equals(i.getAction())) askUpdate();
-        else if (DownloadReceiver.ACTION_INSTALL.equals(i.getAction())) finishUpdate(prefs.getLong(Updater.U_DL, -1));
     }
 
     private void updateVersionInfo() {
@@ -654,24 +666,16 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         if (!Updater.available(this)) return;
         new AlertDialog.Builder(this)
                 .setTitle("Нова версія " + prefs.getString(Updater.U_NAME, ""))
-                .setMessage("Завантажити й встановити оновлення? Налаштування збережуться.")
-                .setPositiveButton("Оновити", new DialogInterface.OnClickListener() {
+                .setMessage("Файл оновлення завантажиться в браузері. Коли завантажиться — відкрийте його і натисніть «Оновити» "
+                        + "(уперше Android попросить дозволити браузеру встановлення). Налаштування збережуться.")
+                .setPositiveButton("Завантажити", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int w) {
-                        try {
-                            Updater.startDownload(MainActivity.this);
-                            versionInfo.setText("Завантажую оновлення…");
-                        } catch (Exception e) {
-                            toastDialog("Не вдалося почати завантаження: " + e.getMessage());
-                        }
+                        try { Updater.openDownload(MainActivity.this); }
+                        catch (Exception e) { toastDialog("Не вдалося відкрити браузер: " + e.getMessage()); }
                     }
                 })
                 .setNegativeButton("Пізніше", null)
                 .show();
-    }
-
-    private void finishUpdate(long id) {
-        String err = Updater.install(this, id);
-        if (err != null) toastDialog("Оновлення не вдалося: " + err);
     }
 
     private void showSettings(boolean on) {
@@ -744,11 +748,12 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         prefs.edit().putBoolean(Prefs.ASKED_BATTERY, true).apply();
         new AlertDialog.Builder(this)
                 .setTitle("Робота у фоні")
-                .setMessage("Щоб телефон не «присипляв» стеження за тривогою, дозвольте програмі працювати без обмежень батареї.")
-                .setPositiveButton("Дозволити", new DialogInterface.OnClickListener() {
+                .setMessage("Щоб телефон не «присипляв» стеження за тривогою, зніміть обмеження батареї: "
+                        + "у налаштуваннях програми відкрийте «Батарея» і виберіть «Без обмежень» (або «Не оптимізувати»).")
+                .setPositiveButton("Відкрити налаштування", new DialogInterface.OnClickListener() {
                     public void onClick(DialogInterface d, int w) {
                         try {
-                            startActivity(new Intent("android.settings.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS",
+                            startActivity(new Intent(android.provider.Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                                     Uri.parse("package:" + getPackageName())));
                         } catch (Exception e) {
                             try { startActivity(new Intent("android.settings.IGNORE_BATTERY_OPTIMIZATION_SETTINGS")); }
@@ -781,10 +786,11 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
 
     @Override
     public void onRequestPermissionsResult(int req, String[] perms, int[] res) {
+        if (req == REQ_NOTIF) { askBattery(false); return; }
         if (req != REQ_LOCATION) return;
         updateAutoUi();
         if (mapMe != null) updateMe();
-        if (prefs.getBoolean(Prefs.ENABLED, true)) MonitorService.checkNow(this);
+        if (prefs.getBoolean(Prefs.ENABLED, true)) { MonitorService.start(this); MonitorService.checkNow(this); }
     }
 
     private void updateAutoUi() {
@@ -805,7 +811,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         String info;
         if (!auto) info = "Район обирається вручну. Автовизначення: мережа (Wi-Fi/вишки) і GPS; неправдоподібні точки"
                 + " (РЕБ, підміна, «стрибки» в іншу країну) відкидаються, район лишається останній надійний.";
-        else if (!hasLocation()) info = "Немає дозволу на геопозицію. Дозвольте його (на Android 10+ — «Дозволяти завжди»).";
+        else if (!hasLocation()) info = "Немає дозволу на геопозицію. Дозвольте його («Під час використання застосунку»).";
         else info = prefs.getString(Prefs.AUTO_INFO, "Визначаю місце… Поки що — обране вручну.");
         autoInfo.setText(info);
     }
@@ -814,7 +820,6 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     protected void onResume() {
         super.onResume();
         visible = true;
-        registerReceiver(dlDone, new android.content.IntentFilter(android.app.DownloadManager.ACTION_DOWNLOAD_COMPLETE));
         updateVersionInfo();
         prefs.registerOnSharedPreferenceChangeListener(this);
         ticker.post(tick);
@@ -824,7 +829,6 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     @Override
     protected void onPause() {
         visible = false;
-        try { unregisterReceiver(dlDone); } catch (Exception ignored) { }
         prefs.unregisterOnSharedPreferenceChangeListener(this);
         ticker.removeCallbacks(tick);
         ticker.removeCallbacks(mapTick);

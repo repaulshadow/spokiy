@@ -7,6 +7,7 @@ import android.app.Service;
 import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
+import android.os.Build;
 import android.os.Handler;
 import android.os.HandlerThread;
 import android.os.IBinder;
@@ -57,7 +58,42 @@ public class MonitorService extends Service {
     private final StreamClient ua = new StreamClient("trevoga-ua", "");
 
     static void start(Context c) {
-        c.startService(new Intent(c, MonitorService.class));
+        Intent i = new Intent(c, MonitorService.class);
+        if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i);   // з фону (після перезавантаження) — лише так
+        else c.startService(i);
+    }
+
+    private Notification lastNotif;
+
+    private void postStatus(Notification n) {
+        lastNotif = n;
+        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(NOTIF_STATUS, n);
+    }
+
+    /**
+     * Перехід у «передній план» з типом служби (Android 14+): specialUse — стеження за тривогою;
+     * + location — лише коли ввімкнене автовизначення району і є дозвіл (інакше система не дозволить).
+     */
+    private void goForeground() {
+        Notification n = lastNotif != null ? lastNotif : statusNotification("Перевірка…");
+        if (Build.VERSION.SDK_INT >= 34) {
+            boolean loc = Prefs.get(this).getBoolean(Prefs.AUTO_PLACE, false) && hasLocationPermission();
+            int special = android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE;
+            try { startForeground(NOTIF_STATUS, n, special | (loc ? android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION : 0)); return; }
+            catch (RuntimeException e) { L("FGS без геопозиції: " + e.getClass().getSimpleName()); }
+            startForeground(NOTIF_STATUS, n, special);
+        } else if (Build.VERSION.SDK_INT >= 29) {
+            boolean loc = Prefs.get(this).getBoolean(Prefs.AUTO_PLACE, false) && hasLocationPermission();
+            startForeground(NOTIF_STATUS, n, loc ? android.content.pm.ServiceInfo.FOREGROUND_SERVICE_TYPE_LOCATION : 0);
+        } else {
+            startForeground(NOTIF_STATUS, n);
+        }
+    }
+
+    private boolean hasLocationPermission() {
+        if (Build.VERSION.SDK_INT < 23) return true;
+        return checkSelfPermission(android.Manifest.permission.ACCESS_FINE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED
+                || checkSelfPermission(android.Manifest.permission.ACCESS_COARSE_LOCATION) == android.content.pm.PackageManager.PERMISSION_GRANTED;
     }
 
     static void checkNow(Context c) {
@@ -73,7 +109,7 @@ public class MonitorService extends Service {
         org.json.JSONObject cfg = AlertSource.embeddedConfig(this);
         if (cfg.optBoolean("fixed", false) && cfg.optBoolean("auto_place", false) && !Prefs.get(this).contains(Prefs.AUTO_PLACE))
             Prefs.get(this).edit().putBoolean(Prefs.AUTO_PLACE, true).apply();
-        startForeground(NOTIF_STATUS, statusNotification("Перевірка…"));
+        goForeground();
         PowerManager pm = (PowerManager) getSystemService(POWER_SERVICE);
         wakeLock = pm.newWakeLock(PowerManager.PARTIAL_WAKE_LOCK, "trevoga:monitor");
         wakeLock.acquire();
@@ -98,6 +134,7 @@ public class MonitorService extends Service {
 
     @Override
     public int onStartCommand(Intent intent, int flags, int startId) {
+        goForeground();   // кожен запуск через startForegroundService вимагає цього; заодно оновлює тип (геопозиція)
         if (!Prefs.get(this).getBoolean(Prefs.ENABLED, true)) {
             stopSelf();
             return START_NOT_STICKY;
@@ -307,8 +344,7 @@ public class MonitorService extends Service {
                 : state == AlertSource.CLEAR ? GREEN : GRAY;
         lastStatusTitle = state == AlertSource.ALERT ? "ПОВІТРЯНА ТРИВОГА" : "Тривога: стежу";
         if (state != AlertSource.ALERT) text = error ? "Немає зв'язку" : region;
-        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE))
-                .notify(NOTIF_STATUS, statusNotification(text));
+        postStatus(statusNotification(text));
     }
 
     static final int RED = 0xFFDC2626, DARK_RED = 0xFF991B1B, GREEN = 0xFF16A34A, GRAY = 0xFF6B7280,
@@ -334,7 +370,7 @@ public class MonitorService extends Service {
 
     private PendingIntent openApp() {
         Intent i = new Intent(this, MainActivity.class).addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
-        return PendingIntent.getActivity(this, 0, i, PendingIntent.FLAG_UPDATE_CURRENT);
+        return PendingIntent.getActivity(this, 0, i, Prefs.PI);
     }
 
     @SuppressWarnings("deprecation")
@@ -383,10 +419,10 @@ public class MonitorService extends Service {
         colorize(b, color);
         if (!quiet && color != GREEN) {
             PendingIntent stop = PendingIntent.getService(this, 1,
-                    new Intent(this, MonitorService.class).setAction(ACTION_STOP_SOUND), PendingIntent.FLAG_UPDATE_CURRENT);
+                    new Intent(this, MonitorService.class).setAction(ACTION_STOP_SOUND), Prefs.PI);
             b.addAction(0, "Вимкнути звук", stop);
         }
-        ((NotificationManager) getSystemService(NOTIFICATION_SERVICE)).notify(NOTIF_STATUS, b.build());
+        postStatus(b.build());
     }
 
     private static void vibrate(Context ctx) {
@@ -408,11 +444,11 @@ public class MonitorService extends Service {
                 .setPriority(Notification.PRIORITY_MAX)
                 .setCategory(Notification.CATEGORY_ALARM)
                 .setAutoCancel(true)
-                .setContentIntent(PendingIntent.getActivity(ctx, 0, open, PendingIntent.FLAG_UPDATE_CURRENT));
+                .setContentIntent(PendingIntent.getActivity(ctx, 0, open, Prefs.PI));
         colorize(b, color);
         if (!quiet) {
             PendingIntent stop = PendingIntent.getService(ctx, 1,
-                    new Intent(ctx, MonitorService.class).setAction(ACTION_STOP_SOUND), PendingIntent.FLAG_UPDATE_CURRENT);
+                    new Intent(ctx, MonitorService.class).setAction(ACTION_STOP_SOUND), Prefs.PI);
             b.addAction(0, "Вимкнути звук", stop);
         } else {
             // без звуку, лише коротка вібрація, щоб сповіщення помітили

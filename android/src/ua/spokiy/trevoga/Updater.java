@@ -1,6 +1,5 @@
 package ua.spokiy.trevoga;
 
-import android.app.DownloadManager;
 import android.app.Notification;
 import android.app.NotificationManager;
 import android.app.PendingIntent;
@@ -8,27 +7,20 @@ import android.content.Context;
 import android.content.Intent;
 import android.content.SharedPreferences;
 import android.net.Uri;
-import android.os.Build;
-import android.os.Environment;
 
 import org.json.JSONObject;
 
-import java.io.File;
-import java.io.FileInputStream;
-import java.io.InputStream;
-import java.security.MessageDigest;
 
 /**
  * Оновлення програми: сервер роздає version.json і Trevoga.apk.
- * Android не дозволяє встановлювати мовчки, тому: сповіщення → завантаження → установник (один тап).
+ * Нова версія → сповіщення → завантаження в браузері → системний установник.
  */
 final class Updater {
     static final String ACTION_UPDATE = "ua.spokiy.trevoga.UPDATE";
     static final int NOTIF_UPDATE = 3;
-    static final String MIME = "application/vnd.android.package-archive";
 
     static final String U_CODE = "upd_code", U_NAME = "upd_name", U_URL = "upd_url", U_SHA = "upd_sha",
-            U_CHECKED = "upd_checked", U_DL = "upd_dl_id";
+            U_CHECKED = "upd_checked";
 
     static int currentCode(Context c) {
         try { return c.getPackageManager().getPackageInfo(c.getPackageName(), 0).versionCode; }
@@ -83,73 +75,21 @@ final class Updater {
                 .setContentTitle("Доступна нова версія " + Prefs.get(c).getString(U_NAME, ""))
                 .setContentText("Натисніть, щоб оновити програму «Тривога»")
                 .setAutoCancel(true)
-                .setContentIntent(PendingIntent.getActivity(c, 7, i, PendingIntent.FLAG_UPDATE_CURRENT));
+                .setContentIntent(PendingIntent.getActivity(c, 7, i, Prefs.PI));
         ((NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE)).notify(NOTIF_UPDATE, b.build());
     }
 
-    static File apkFile(Context c) {
-        File dir = c.getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
-        return new File(dir, "Trevoga-" + Prefs.get(c).getInt(U_CODE, 0) + ".apk");
-    }
-
-    /** Починає завантаження APK через системний менеджер завантажень. */
-    static long startDownload(Context c) {
-        SharedPreferences p = Prefs.get(c);
-        File f = apkFile(c);
-        if (f.exists()) f.delete();
-        DownloadManager dm = (DownloadManager) c.getSystemService(Context.DOWNLOAD_SERVICE);
-        DownloadManager.Request r = new DownloadManager.Request(
-                Uri.parse(p.getString(U_URL, "") + "?v=" + p.getInt(U_CODE, 0)));
-        r.setTitle("Тривога " + p.getString(U_NAME, ""));
-        r.setDescription("Оновлення програми");
-        r.setMimeType(MIME);
-        r.setNotificationVisibility(DownloadManager.Request.VISIBILITY_VISIBLE);
-        r.setDestinationInExternalFilesDir(c, Environment.DIRECTORY_DOWNLOADS, f.getName());
-        long id = dm.enqueue(r);
-        p.edit().putLong(U_DL, id).apply();
-        return id;
-    }
-
-    static String sha256(File f) throws Exception {
-        MessageDigest md = MessageDigest.getInstance("SHA-256");
-        InputStream in = new FileInputStream(f);
-        try {
-            byte[] buf = new byte[65536];
-            int n;
-            while ((n = in.read(buf)) > 0) md.update(buf, 0, n);
-        } finally {
-            in.close();
-        }
-        StringBuilder sb = new StringBuilder();
-        for (byte b : md.digest()) sb.append(String.format("%02x", b));
-        return sb.toString();
-    }
-
-    /** Після завантаження: перевірка контрольної суми і запуск установника. null — успіх, інакше текст помилки. */
-    static String install(Context c, long id) {
-        try {
-            File f = apkFile(c);
-            if (!f.exists()) return "файл не завантажився";
-            String want = Prefs.get(c).getString(U_SHA, "");
-            if (want.length() > 0 && !want.equals(sha256(f))) {
-                f.delete();
-                return "контрольна сума не збігається";
-            }
-            Uri uri;
-            if (Build.VERSION.SDK_INT >= 24) {
-                DownloadManager dm = (DownloadManager) c.getSystemService(Context.DOWNLOAD_SERVICE);
-                uri = dm.getUriForDownloadedFile(id);
-            } else {
-                uri = Uri.fromFile(f);
-            }
-            if (uri == null) return "не вдалося відкрити файл";
-            Intent i = new Intent(Intent.ACTION_VIEW).setDataAndType(uri, MIME)
-                    .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_GRANT_READ_URI_PERMISSION);
-            c.startActivity(i);
-            ((NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE)).cancel(NOTIF_UPDATE);
-            return null;
-        } catch (Exception e) {
-            return e.getMessage() != null ? e.getMessage() : e.getClass().getSimpleName();
-        }
+    /**
+     * Завантаження нової версії — через браузер (як звичайне встановлення з сайту): програма сама нічого
+     * не встановлює і не просить дозволу «встановлювати програми» — так Play Protect не вважає її «завантажувачем».
+     * Android перевіряє, що оновлення підписане тим самим ключем.
+     */
+    static void openDownload(Context c) {
+        String url = Prefs.get(c).getString(U_URL, "");
+        if (url.length() == 0) url = AlertSource.server(c) + "/download/Trevoga.apk";
+        Intent i = new Intent(Intent.ACTION_VIEW, Uri.parse(url + "?v=" + Prefs.get(c).getInt(U_CODE, 0)))
+                .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
+        c.startActivity(i);
+        ((NotificationManager) c.getSystemService(Context.NOTIFICATION_SERVICE)).cancel(NOTIF_UPDATE);
     }
 }

@@ -1,10 +1,10 @@
 <?xml version="1.0" encoding="utf-8"?>
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     package="ua.spokiy.trevoga"
-    android:versionCode="26"
-    android:versionName="3.13">
+    android:versionCode="27"
+    android:versionName="3.14">
 
-    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="25" />
+    <uses-sdk android:minSdkVersion="21" android:targetSdkVersion="35" />
 
     <uses-permission android:name="android.permission.INTERNET" />
     <uses-permission android:name="android.permission.ACCESS_NETWORK_STATE" />
@@ -12,9 +12,9 @@
     <uses-permission android:name="android.permission.VIBRATE" />
     <uses-permission android:name="android.permission.RECEIVE_BOOT_COMPLETED" />
     <uses-permission android:name="android.permission.FOREGROUND_SERVICE" />
-    <uses-permission android:name="android.permission.REQUEST_IGNORE_BATTERY_OPTIMIZATIONS" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_SPECIAL_USE" />
+    <uses-permission android:name="android.permission.FOREGROUND_SERVICE_LOCATION" />
     <uses-permission android:name="android.permission.POST_NOTIFICATIONS" />
-    <uses-permission android:name="android.permission.REQUEST_INSTALL_PACKAGES" />
     <uses-permission android:name="android.permission.ACCESS_FINE_LOCATION" />
     <uses-permission android:name="android.permission.ACCESS_COARSE_LOCATION" />
 
@@ -35,15 +35,15 @@
             </intent-filter>
         </activity>
 
-        <service android:name=".MonitorService" android:exported="false" />
+        <!-- Постійна служба: живе з'єднання з сервером тривог, сирена й голос. specialUse — стеження за тривогою;
+             location — лише коли ввімкнене автовизначення району і є дозвіл на геопозицію -->
+        <service android:name=".MonitorService" android:exported="false"
+            android:foregroundServiceType="specialUse|location">
+            <property android:name="android.app.PROPERTY_SPECIAL_USE_FGS_SUBTYPE"
+                android:value="Air-raid alert monitor: keeps a live connection to the alert server and plays the siren and voice announcement when an air-raid alert starts or ends in the user's district." />
+        </service>
 
-        <receiver android:name=".DownloadReceiver" android:exported="true">
-            <intent-filter>
-                <action android:name="android.intent.action.DOWNLOAD_COMPLETE" />
-            </intent-filter>
-        </receiver>
-
-        <receiver android:name=".BootReceiver" android:exported="true">
+        <receiver android:name=".BootReceiver" android:exported="false">
             <intent-filter>
                 <action android:name="android.intent.action.BOOT_COMPLETED" />
                 <action android:name="android.intent.action.MY_PACKAGE_REPLACED" />
