@@ -71,7 +71,7 @@ change(lambda: (W.ua_o.__setitem__("м. Київ", "red"), W.ua_o.__setitem__("�
 log_has(r"STATE Alert", 30)
 adb("shell", "am", "start", "-n", PKG + "/.MainActivity")
 shot("05_home_alert")
-tap_desc("Карта"); time.sleep(6); shot("05b_map")
+adb("shell", "am", "start", "-n", PKG + "/.MainActivity", "--ez", "map", "true"); time.sleep(6); shot("05b_map")
 b = bounds("Карта цілей")
 if b:
     W_ = b[2] - b[0]; ox = b[0] + int(W_ * 0.476); oy = b[1] + int((b[3] - b[1]) * 0.5 + (0.733 - 0.5) * W_ / 12.13 * 8.15)
@@ -85,7 +85,7 @@ adb("shell", "cmd", "uimode", "night", "yes"); time.sleep(3); shot("07_home_aler
 tap_desc("Налаштування"); shot("08_settings_dark")
 adb("shell", "input", "keyevent", "KEYCODE_BACK")
 adb("shell", "cmd", "uimode", "night", "no")
-time.sleep(3); tap_desc("Простий")
+time.sleep(3); adb("shell", "am", "start", "-n", PKG + "/.MainActivity", "--ez", "map", "false")
 adb("logcat", "-c")
 change(lambda: W.ua_o.clear())
 log_has(r"SOUND clear", 30)

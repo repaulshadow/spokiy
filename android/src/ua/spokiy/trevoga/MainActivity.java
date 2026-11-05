@@ -608,7 +608,12 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     }
 
     private void handleIntent(Intent i) {
-        if (i == null || i.getAction() == null) return;
+        if (i == null) return;
+        if (i.hasExtra("map") && mapCard != null) {   // вигляд «Простий/Карта» ззовні (ярлик, автотест)
+            prefs.edit().putBoolean(Prefs.MAP_VIEW, i.getBooleanExtra("map", false)).apply();
+            applyMode();
+        }
+        if (i.getAction() == null) return;
         if (Updater.ACTION_UPDATE.equals(i.getAction())) askUpdate();
         else if (DownloadReceiver.ACTION_INSTALL.equals(i.getAction())) finishUpdate(prefs.getLong(Updater.U_DL, -1));
     }

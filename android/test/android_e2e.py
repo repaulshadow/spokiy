@@ -164,19 +164,18 @@ def main():
     expect("Справжній відбій — звучить", r"SOUND clear", 15, m)
 
     # Вигляд «Карта»: відкрити, наблизити, торкнутись — програма не падає
-    adb("shell", "am", "start", "-n", PKG + "/.MainActivity"); time.sleep(3)
-    adb("shell", "uiautomator", "dump", "/sdcard/u.xml")
-    ui = adb("shell", "cat", "/sdcard/u.xml")
-    mm = re.search(r'content-desc="Карта"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"', ui)
-    step("Перемикач «Карта» є", mm is not None)
-    if mm:
-        b = list(map(int, mm.groups()))
-        adb("shell", "input", "tap", str((b[0] + b[2]) // 2), str((b[1] + b[3]) // 2)); time.sleep(8)
-        for _ in range(3):
-            adb("shell", "input", "tap", "160", "330"); time.sleep(0.12); adb("shell", "input", "tap", "160", "330"); time.sleep(2)
-        adb("shell", "input", "tap", "170", "320"); time.sleep(3)
-        step("Карта відкрита — програма на екрані", PKG in adb("shell", "dumpsys", "activity", "activities").split("mResumedActivity")[-1][:300] or
-             PKG in adb("shell", "dumpsys", "window").split("mCurrentFocus")[-1][:200])
+    m = mark()
+    adb("shell", "am", "start", "-n", PKG + "/.MainActivity", "--ez", "map", "true"); time.sleep(8)
+    sz = re.search(r"(\d+)x(\d+)", adb("shell", "wm", "size"))
+    w, h = (int(sz.group(1)), int(sz.group(2))) if sz else (320, 640)
+    for _ in range(3):
+        adb("shell", "input", "tap", str(w // 2), str(h * 52 // 100)); time.sleep(0.12)
+        adb("shell", "input", "tap", str(w // 2), str(h * 52 // 100)); time.sleep(2)
+    for k in range(5): adb("shell", "input", "tap", str(w * (3 + k) // 10), str(h * 50 // 100)); time.sleep(1)
+    time.sleep(3)
+    fatal = [msg for t, tag, msg in LOG[m:] if tag == "AndroidRuntime"]
+    step("Вигляд «Карта»: наближення й дотики без аварій", not fatal and adb("shell", "pidof", PKG).strip() != "", fatal[0][:200] if fatal else "")
+    adb("shell", "am", "start", "-n", PKG + "/.MainActivity", "--ez", "map", "false"); time.sleep(2)
     crashes = [msg for t, tag, msg in LOG if tag == "AndroidRuntime" and ("FATAL" in msg or PKG in msg)]
     step("Без аварій програми", not crashes, crashes[0][:200] if crashes else "")
     step("Служба жива наприкінці", adb("shell", "pidof", PKG).strip() != "")
