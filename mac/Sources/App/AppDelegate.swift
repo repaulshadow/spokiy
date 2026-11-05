@@ -102,6 +102,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate, NSWindowDelegate {
             default: return (" ?", nil)
             }
         }()
+        // значок: сирена — тривога, перекреслена — тривоги немає
+        let img = NSImage(named: m.state == .clear ? "MenuIconOff" : "MenuIcon")
+        img?.isTemplate = true
+        b.image = img
+        b.alphaValue = m.state == .unknown ? 0.5 : 1
         if let col = col {
             b.attributedTitle = NSAttributedString(string: txt, attributes: [.foregroundColor: col, .font: NSFont.systemFont(ofSize: 12, weight: .bold)])
             b.contentTintColor = col

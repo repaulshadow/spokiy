@@ -26,7 +26,7 @@ echo "== Ресурси"
 cp ../android/res/raw/tetiana_*.wav ../android/res/raw/mykyta_*.wav $APP/Contents/Resources/voice/
 python3 ../tools/make_sounds.py $APP/Contents/Resources
 cp ../android/res/raw/geo.json ../android/res/raw/cities.json ../config.json $APP/Contents/Resources/
-cp MenuIcon.png MenuIcon@2x.png $APP/Contents/Resources/
+cp MenuIcon.png MenuIcon@2x.png MenuIconOff.png MenuIconOff@2x.png $APP/Contents/Resources/
 IS=build/AppIcon.iconset; mkdir -p $IS
 for s in 16 32 128 256 512; do
   sips -z $s $s AppIcon.png --out $IS/icon_${s}x${s}.png >/dev/null
