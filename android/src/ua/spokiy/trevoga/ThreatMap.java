@@ -639,9 +639,13 @@ public class ThreatMap extends View {
         gm.postScale(sc, sc);
         if (t.heading >= 0 && sb != S_FPV) gm.postRotate(t.heading);
         gm.postTranslate(x, y);
-        Glyphs.get(gi).transform(gm, gp);
         icon.setColor(Color.WHITE);
-        c.drawPath(gp, icon);
+        try {
+            Glyphs.get(gi).transform(gm, gp);
+            c.drawPath(gp, icon);
+        } catch (RuntimeException e) {
+            c.drawCircle(x, y, r * 0.35f, icon);   // запасний значок — карта не повинна падати
+        }
         if (sb == S_FPV) {
             icon.setStyle(Paint.Style.STROKE);
             icon.setStrokeWidth(1.3f * sc);

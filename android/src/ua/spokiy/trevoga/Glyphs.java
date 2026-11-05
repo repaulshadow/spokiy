@@ -31,18 +31,41 @@ final class Glyphs {
         return cache[i];
     }
 
-    /** Розбір SVG-шляху (лише M, L, C, Z — абсолютні координати). */
+    /** Лексеми SVG-шляху: команди (M, L, C, Z) і числа — «M12 2.8» і «M 12 2.8» однаково. Без Android — для автотестів. */
+    static java.util.List<String> tokens(String d) {
+        java.util.List<String> out = new java.util.ArrayList<String>();
+        java.util.regex.Matcher m = java.util.regex.Pattern.compile("[MLCZmlcz]|[-+]?(?:\\d+\\.?\\d*|\\.\\d+)").matcher(d);
+        while (m.find()) out.add(m.group());
+        return out;
+    }
+
+    /** Перевірка шляху: лише M, L, C, Z з правильною кількістю чисел. null — усе гаразд, інакше опис помилки. */
+    static String check(String d) {
+        java.util.List<String> t = tokens(d);
+        int i = 0;
+        while (i < t.size()) {
+            String c = t.get(i++);
+            int n = c.equals("M") || c.equals("L") ? 2 : c.equals("C") ? 6 : c.equals("Z") ? 0 : -1;
+            if (n < 0) return "невідома команда " + c;
+            for (int k = 0; k < n; k++, i++) {
+                if (i >= t.size()) return "обірвано після " + c;
+                try { Float.parseFloat(t.get(i)); } catch (NumberFormatException e) { return "не число: " + t.get(i); }
+            }
+        }
+        return null;
+    }
+
+    /** Розбір SVG-шляху (M, L, C, Z — абсолютні координати). */
     static Path parse(String d) {
         Path p = new Path();
-        String[] tk = d.trim().split("\\s+");
+        java.util.List<String> tk = tokens(d);
         int i = 0;
-        while (i < tk.length) {
-            String c = tk[i++];
-            if (c.equals("M")) { p.moveTo(f(tk[i]), f(tk[i + 1])); i += 2; }
-            else if (c.equals("L")) { p.lineTo(f(tk[i]), f(tk[i + 1])); i += 2; }
-            else if (c.equals("C")) { p.cubicTo(f(tk[i]), f(tk[i + 1]), f(tk[i + 2]), f(tk[i + 3]), f(tk[i + 4]), f(tk[i + 5])); i += 6; }
+        while (i < tk.size()) {
+            String c = tk.get(i++);
+            if (c.equals("M")) { p.moveTo(f(tk.get(i)), f(tk.get(i + 1))); i += 2; }
+            else if (c.equals("L")) { p.lineTo(f(tk.get(i)), f(tk.get(i + 1))); i += 2; }
+            else if (c.equals("C")) { p.cubicTo(f(tk.get(i)), f(tk.get(i + 1)), f(tk.get(i + 2)), f(tk.get(i + 3)), f(tk.get(i + 4)), f(tk.get(i + 5))); i += 6; }
             else if (c.equals("Z")) p.close();
-            else throw new IllegalArgumentException("SVG: " + c);
         }
         return p;
     }

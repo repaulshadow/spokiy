@@ -20,11 +20,24 @@ enum Glyphs {
     static let parsed: [Path] = paths.map(parse)
 
     /// Розбір SVG-шляху (лише M, L, C, Z — абсолютні координати).
+    static func tokens(_ d: String) -> [String] {
+        var out: [String] = [], num = ""
+        func flush() { if !num.isEmpty { out.append(num); num = "" } }
+        for ch in d {
+            if "MLCZ".contains(ch) { flush(); out.append(String(ch)) }
+            else if ch == "-" { flush(); num = "-" }
+            else if ch.isNumber || ch == "." { num.append(ch) }
+            else { flush() }
+        }
+        flush()
+        return out
+    }
+
     static func parse(_ d: String) -> Path {
         var p = Path()
-        let tk = d.split(separator: " ").map(String.init)
+        let tk = tokens(d)
         var i = 0
-        func f(_ k: Int) -> CGFloat { CGFloat(Double(tk[k]) ?? 0) }
+        func f(_ k: Int) -> CGFloat { k < tk.count ? CGFloat(Double(tk[k]) ?? 0) : 0 }
         while i < tk.count {
             let c = tk[i]; i += 1
             switch c {
@@ -32,7 +45,7 @@ enum Glyphs {
             case "L": p.addLine(to: CGPoint(x: f(i), y: f(i + 1))); i += 2
             case "C": p.addCurve(to: CGPoint(x: f(i + 4), y: f(i + 5)), control1: CGPoint(x: f(i), y: f(i + 1)), control2: CGPoint(x: f(i + 2), y: f(i + 3))); i += 6
             case "Z": p.closeSubpath()
-            default: i += 1
+            default: break
             }
         }
         return p

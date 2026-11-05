@@ -70,6 +70,10 @@ public class AndroidLogicTests {
         long t0 = System.currentTimeMillis();
         String T0 = iso(t0 - 600000);
         testNorm();
+        for (int i = 0; i < Glyphs.PATHS.length; i++) {
+            String err = Glyphs.check(Glyphs.PATHS[i]);
+            if (err == null && Glyphs.tokens(Glyphs.PATHS[i]).size() > 4) passed++; else { failed++; System.out.println("FAIL: силует " + Glyphs.NAMES[i] + ": " + err); }
+        }
         testMerge(T0);
         testUa(T0, t0);
         testEngine(t0);
