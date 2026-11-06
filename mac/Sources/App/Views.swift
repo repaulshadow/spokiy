@@ -16,6 +16,7 @@ struct ContentView: View {
     @ObservedObject var m = Monitor.shared
     @ObservedObject var s = Settings.shared
     @ObservedObject var map = MapModel.shared
+    @ObservedObject var loc = LocationModel.shared
     @State private var showSettings = false
     @State private var tick = Date()
     let timer = Timer.publish(every: 30, on: .main, in: .common).autoconnect()
@@ -52,8 +53,8 @@ struct ContentView: View {
         .frame(minWidth: 420, idealWidth: 460, minHeight: 520)
         .sheet(isPresented: $showSettings) { SettingsView(close: { showSettings = false }) }
         .onReceive(timer) { tick = $0 }
-        .onAppear { map.activate(s.mapView) }
-        .onChange(of: s.mapView) { map.activate($0) }
+        .onAppear { map.activate(s.mapView); loc.activate(s.mapView) }
+        .onChange(of: s.mapView) { map.activate($0); loc.activate($0) }
     }
 
     private var cardColor: Color {
@@ -110,6 +111,7 @@ struct ContentView: View {
     private var mapCard: some View {
         VStack(alignment: .leading, spacing: 8) {
             MapView()
+            meLine
             ScrollView(.horizontal, showsIndicators: false) {
                 HStack(spacing: 6) {
                     let rel = map.relevant()
@@ -136,6 +138,20 @@ struct ContentView: View {
         }
         .padding(10)
         .background(RoundedRectangle(cornerRadius: 18).fill(Color.primary.opacity(0.05)))
+    }
+
+    /** «📍 Ви тут: Одеса» — один рядок завжди (щоб нічого не зсувалося); без дозволу — кнопка. */
+    @ViewBuilder private var meLine: some View {
+        if let la = loc.lat, let lo = loc.lon {
+            let name = map.cityIndex(la, lo, near: false).map { map.cities[$0].name }
+                ?? map.cityIndex(la, lo, near: true).map { "біля: " + map.cities[$0].name } ?? s.place
+            Text("📍 Ви тут: \(name)").font(.system(size: 12, weight: .semibold)).lineLimit(1)
+        } else if loc.allowed {
+            Text("📍 Визначаю, де ви…").font(.system(size: 12)).foregroundColor(.secondary).lineLimit(1)
+        } else {
+            Button(loc.denied ? "📍 Показати себе на карті — дозволити геопозицію в налаштуваннях" : "📍 Показати себе на карті") { loc.ask() }
+                .buttonStyle(.link).font(.system(size: 12)).lineLimit(1)
+        }
     }
 
     private func chip(_ c: Color, _ s: String) -> some View {

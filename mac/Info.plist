@@ -15,6 +15,8 @@
   <key>LSApplicationCategoryType</key><string>public.app-category.utilities</string>
   <key>NSHighResolutionCapable</key><true/>
   <key>NSHumanReadableCopyright</key><string>Дані: alerts.in.ua, UkraineAlarm, NEPTUN (neptun.in.ua), міста — GeoNames</string>
+  <key>NSLocationUsageDescription</key><string>Щоб показати на карті, де ви зараз (крапка «Ви тут»). Район тривоги не змінюється.</string>
+  <key>NSLocationWhenInUseUsageDescription</key><string>Щоб показати на карті, де ви зараз (крапка «Ви тут»). Район тривоги не змінюється.</string>
   <key>NSAppTransportSecurity</key><dict><key>NSAllowsLocalNetworking</key><true/></dict>
 </dict>
 </plist>

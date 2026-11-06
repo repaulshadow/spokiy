@@ -14,6 +14,7 @@ struct MapView: View {
     @ObservedObject var model = MapModel.shared
     @ObservedObject var monitor = Monitor.shared
     @ObservedObject var settings = Settings.shared
+    @ObservedObject var loc = LocationModel.shared
     @Environment(\.colorScheme) var scheme
     @State private var zoom: CGFloat = 1
     @State private var pan: CGSize = .zero
@@ -194,6 +195,13 @@ struct MapView: View {
         else { for a in g.oblasts where a.name == settings.region { ctx.stroke(path(a.path), with: .color(accent), lineWidth: 2.2) } }
 
         drawCities(&ctx, size, x)
+        // «Ви тут» — синя крапка
+        if let la = loc.lat, let lo = loc.lon {
+            let p = x.ll(la, lo)
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - 13, y: p.y - 13, width: 26, height: 26)), with: .color(Color(rgb: 0x1A73E8, 0.2)))
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - 7, y: p.y - 7, width: 14, height: 14)), with: .color(.white))
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - 5, y: p.y - 5, width: 10, height: 10)), with: .color(Color(rgb: 0x1A73E8)))
+        }
 
         // цілі
         let pxPerKm = x.s * x.z / 111
@@ -256,22 +264,28 @@ struct MapView: View {
     private func drawCities(_ ctx: inout GraphicsContext, _ size: CGSize, _ x: Xf) {
         let pm = popMin(x.z)
         var placed: [CGRect] = []
-        for c in model.cities {
-            if c.cap == 0 && c.pop < pm { continue }
+        // своє місто — першим, кольором акценту й жирним
+        let mine = loc.lat.flatMap { la in loc.lon.flatMap { model.cityIndex(la, $0, near: false) } }
+        var order = Array(model.cities.indices)
+        if let m = mine { order.removeAll { $0 == m }; order.insert(m, at: 0) }
+        for i in order {
+            let c = model.cities[i]
+            let isMine = i == mine
+            if !isMine && c.cap == 0 && c.pop < pm { continue }
             let p = x.ll(c.lat, c.lon)
             if p.x < -40 || p.y < -20 || p.x > size.width + 40 || p.y > size.height + 20 { continue }
-            let big = c.cap > 0
+            let big = c.cap > 0 || isMine
             let font = Font.system(size: c.cap == 2 ? 12.5 : big ? 11 : 10, weight: big ? .semibold : .regular)
-            let txt = ctx.resolve(Text(c.name).font(font).foregroundColor(ink))
+            let txt = ctx.resolve(Text(c.name).font(font).foregroundColor(isMine ? Color.accentColor : ink))
             let ts = txt.measure(in: CGSize(width: 400, height: 40))
             let r: CGFloat = big ? 3 : 2.3
             var lx = p.x + r + 3
             if lx + ts.width > size.width - 2 { lx = p.x - r - 3 - ts.width }
             let box = CGRect(x: min(lx, p.x - r), y: p.y - ts.height / 2, width: ts.width + r + 3, height: ts.height)
-            if placed.contains(where: { $0.intersects(box) }) { continue }
+            if !isMine && placed.contains(where: { $0.intersects(box) }) { continue }
             placed.append(box)
             ctx.fill(Path(ellipseIn: CGRect(x: p.x - r - 1.2, y: p.y - r - 1.2, width: 2 * r + 2.4, height: 2 * r + 2.4)), with: .color(land))
-            ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)), with: .color(ink))
+            ctx.fill(Path(ellipseIn: CGRect(x: p.x - r, y: p.y - r, width: 2 * r, height: 2 * r)), with: .color(isMine ? Color.accentColor : ink))
             // ореол під підписом — читається поверх кордонів і заливки
             let halo = ctx.resolve(Text(c.name).font(font).foregroundColor(land))
             for (dx, dy) in [(-1.0, 0.0), (1, 0), (0, -1), (0, 1), (-1, -1), (1, 1), (-1, 1), (1, -1)] {
