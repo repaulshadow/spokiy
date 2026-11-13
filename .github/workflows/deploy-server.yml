@@ -94,6 +94,14 @@ jobs:
           if [ -z "$UA_TOKEN" ]; then echo "UKRAINEALARM_TOKEN не задан — пропускаю"; exit 0; fi
           printf '%s' "$UA_TOKEN" | npx --yes wrangler@4.145.0 secret put UA_TOKEN
 
+      - name: Set Firebase service account (push для версії з Google Play)
+        env:
+          FCM_SA: ${{ secrets.FCM_SERVICE_ACCOUNT }}
+        run: |
+          if [ -z "$FCM_SA" ]; then echo "FCM_SERVICE_ACCOUNT не задан — push вимкнено"; exit 0; fi
+          printf '%s' "$FCM_SA" | python3 -c "import json,sys; j=json.load(sys.stdin); assert j['project_id'] and j['client_email'] and j['private_key']; print('project:', j['project_id'])"
+          printf '%s' "$FCM_SA" | npx --yes wrangler@4.145.0 secret put FCM_SA
+
       - name: Save server address to config.json
         run: |
           url=$(grep -oE 'https://[a-z0-9.-]+\.workers\.dev' deploy.log | head -1 || true)

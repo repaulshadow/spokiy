@@ -13,6 +13,8 @@
 //               l: "red", t: ["ballistic_missiles", "drones"] }, ... ]   // u — uid місця, o — області, s — початок, l — рівень (red/yellow)
 // }
 
+import { Pusher, slices, signatures } from "./push.js";
+
 const UPSTREAM_DEFAULT = "https://api.alerts.in.ua";
 const NEPTUN_DEFAULT = "https://neptun.in.ua";
 const AIN_MS = 20000;          // alerts.in.ua: 2 запити раз на 20 с = 6 на хвилину (їхній ліміт 8–10)
@@ -199,6 +201,8 @@ export class AlertsHub {
     this.ua = { regions: {}, at: 0, okAt: 0, hookAt: 0, hooks: 0, err: null, lastReq: 0 };
     this.uaDir = null;       // довідник регіонів: id -> { n: назва, t: тип, o: назва області, d: назва району }
     this.pending = null;     // спільний запит, якщо кілька прийшли одночасно
+    this.pusher = new Pusher(env);   // push для версії з Google Play; без секрету FCM_SA — вимкнено
+    this.push = null;        // { sig: підписи зрізів по областях, names: ключ → назва } — що вже надіслано
   }
 
   async load() {
@@ -210,6 +214,7 @@ export class AlertsHub {
     if (m.get("nep")) this.nep = m.get("nep");
     if (m.get("ua")) this.ua = m.get("ua");
     if (m.get("uaDir")) this.uaDir = m.get("uaDir");
+    this.push = (await this.state.storage.get("push")) || null;
     const lg = await this.state.storage.get(["events", "seen"]);
     this.seen = lg.get("seen") || {};
     // Журнал подій — таблиця SQLite (зберігаємо 21 день)
@@ -309,6 +314,7 @@ export class AlertsHub {
             last_hook_s: this.ua.hookAt ? Math.round((now - this.ua.hookAt) / 1000) : null, hooks: this.ua.hooks || 0,
             stream_clients: this.state.getWebSockets().length, error: this.ua.err,
           },
+          fcm: { enabled: this.pusher.enabled, ...this.pusher.stats, oblasts: this.push ? Object.keys(this.push.sig).length : null },
         },
       });
     }
@@ -324,6 +330,7 @@ export class AlertsHub {
     const body = JSON.stringify({
       ok: true,
       poll: Number(this.env.POLL_S) || POLL_S,
+      push: this.pusher.enabled && this.uaFresh(now),   // push працює — версії з Google Play можна опитувати рідко
       updated: new Date(Math.max(this.ain.okAt, this.nep.okAt)).toISOString(),
       air: a ? a.air : null,
       alerts: a ? a.alerts : [],
@@ -615,6 +622,25 @@ export class AlertsHub {
     for (const o of p.o) keys.add(o[0] + " · " + (o[2] || ""));
     this.track("UkraineAlarm", keys);
     if (this.dirtyLog) { this.state.storage.put("seen", this.seen).catch(() => {}); this.dirtyLog = false; }
+    if (this.pusher.enabled) this.state.waitUntil(this.pushUa(p).catch(() => {}));
+  }
+
+  // Push (FCM) — по одному повідомленню на область, де щось змінилося. Лише за свіжих даних UkraineAlarm:
+  // застарілі дані не повинні перетворитися на «відбій» у телефонах.
+  async pushUa(p) {
+    const now = Date.now();
+    if (!this.uaFresh(now)) return;
+    const sl = slices(p), sig = signatures(sl);
+    if (!this.push) {   // перший запуск — лише запам'ятати стан, нічого не розсилати
+      const names = {};
+      for (const [k, v] of Object.entries(sl)) names[k] = v.n;
+      this.push = { sig, names };
+    } else {
+      const prev = this.push.sig;
+      this.push = { sig, names: this.push.names || {} };   // одразу — щоб паралельний виклик не надіслав те саме
+      this.push.names = await this.pusher.pushChanges(prev, sig, sl, this.push.names, now);
+    }
+    await this.state.storage.put("push", this.push);
   }
 
   // Будильник: heartbeat для потоку і звірка UkraineAlarm навіть коли ніхто не опитує /status
