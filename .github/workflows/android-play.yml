@@ -60,11 +60,12 @@ jobs:
       - name: AAB (без підпису)
         run: |
           cp config.json android/res/raw/config.json
-          cd android/play && gradle --no-daemon -q bundleRelease
-          ls -la build/outputs/bundle/release/
+          cd android/play && gradle --no-daemon -q bundleRelease assembleRelease
+          ls -la build/outputs/bundle/release/ build/outputs/apk/release/
       - name: AAB → гілка aab-unsigned
         run: |
           mkdir -p out && cp android/play/build/outputs/bundle/release/*.aab out/Trevoga-play-unsigned.aab
+          cp android/play/build/outputs/apk/release/*.apk out/Trevoga-play-unsigned.apk
           echo "versionCode $(cat android/play/VERSION_CODE), $(grep -o 'versionName="[^"]*"' android/AndroidManifest.xml)" > out/info.txt
           cd out && git init -q -b aab && git add -A
           git -c user.name=ci -c user.email=ci@localhost commit -qm "unsigned aab $(cat info.txt)"
