@@ -26,7 +26,10 @@ final class PlayPush {
     /** Привести підписку у відповідність до налаштувань: увімкнено → тема області; вимкнено → без підписки. */
     static synchronized void sync(Context c) {
         final SharedPreferences p = Prefs.get(c);
-        final String want = p.getBoolean(Prefs.ENABLED, true) ? topic(Prefs.region(c)) : null;
+        // тестова збірка (сервер-імітація) слухає окремі теми «…_t» — справжні користувачі тестових push не отримують
+        String tp = topic(Prefs.region(c));
+        if (tp != null && AlertSource.embeddedFixed(c)) tp += "_t";
+        final String want = p.getBoolean(Prefs.ENABLED, true) ? tp : null;
         final String have = p.getString(TOPIC, null);
         if (want == null ? have == null : want.equals(have)) return;
         if (want != null && want.equals(pending)) return;   // запит уже надіслано — чекаємо відповіді

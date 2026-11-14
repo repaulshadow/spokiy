@@ -6,6 +6,7 @@ HERE = os.path.dirname(os.path.abspath(__file__))
 APK = os.path.abspath(sys.argv[1])
 sys.argv = [sys.argv[0], "-", os.path.join(HERE, "..", "build", "e2e-unused")]
 sys.path.insert(0, os.path.join(HERE, "..", "..", "test"))
+sys.path.insert(0, HERE)
 import e2e
 from e2e import W, change
 from http.server import ThreadingHTTPServer
@@ -43,6 +44,31 @@ def push(d):
 def notif_has(text): return text in adb("shell", "dumpsys", "notification", "--noredact")
 def services(): return adb("shell", "dumpsys", "activity", "services", PKG)
 def run_job(): adb("shell", "cmd", "jobscheduler", "run", "-f", PKG, "7")
+
+def real_fcm(now):
+    """Справжній push через Google (Firebase) на тестову тему — лише де є сервіси Google Play і ключ у FCM_SA."""
+    sub = [m for t, m in LOG if "PUSH підписка o_" in m]
+    if not os.environ.get("FCM_SA") or not sub:
+        print("::notice title=Play FCM::справжній push не перевірявся (%s)" % ("немає ключа" if not os.environ.get("FCM_SA") else "в емуляторі немає сервісів Google Play"), flush=True)
+        return
+    topic = re.search(r"o_[0-9a-f]+_t", sub[-1])
+    step("Тестова тема FCM", topic is not None, sub[-1][-80:])
+    if not topic: return
+    import fcm_send
+    time.sleep(32)   # після попереднього push
+    m = mark(); t = time.time()
+    try: fcm_send.send(topic.group(0), KYIV, {"r": [], "o": [[KYIV, now, "red", ["drones"]]], "c": []})
+    except Exception as ex: step("Справжній push надіслано через Firebase", False, repr(ex)[:200]); return
+    step("Справжній push надіслано через Firebase", True)
+    expect("Справжній push доставлено Google — швидкість", r"PUSH м\. Київ", 60, m, t, max_latency=20)
+    expect("Справжній push: тривога зі звуком", r"SOUND alarm$", 10, m)
+    # процес зупинено системою (не користувачем) — Google будить програму
+    adb("shell", "input", "keyevent", "KEYCODE_HOME"); time.sleep(2)
+    adb("shell", "am", "kill", PKG); time.sleep(3)
+    m = mark(); t = time.time()
+    fcm_send.send(topic.group(0), KYIV, {"r": [], "o": [], "c": []})
+    expect("Справжній push будить зупинену програму — швидкість", r"PUSH м\. Київ", 60, m, t, max_latency=20)
+    expect("Справжній push: відбій зі звуком із фону", r"SOUND clear$", 10, m)
 
 def main():
     threading.Thread(target=ThreadingHTTPServer(("127.0.0.1", e2e.HTTP_PORT), e2e.H).serve_forever, daemon=True).start()
@@ -109,6 +135,7 @@ def main():
     expect("Жовтий → червоний", r"SOUND escalation", 10, m)
     m = mark(); push({"r": [], "o": [], "c": []})
     expect("Фінальний відбій", r"SOUND clear", 10, m)
+    real_fcm(now)
     time.sleep(3)
     crashes = [msg for t, msg in LOG if "AndroidRuntime" in msg and ("FATAL" in msg or PKG in msg)]
     step("Без аварій програми", not crashes, crashes[0][:200] if crashes else "")
