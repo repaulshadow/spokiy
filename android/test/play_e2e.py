@@ -47,7 +47,11 @@ def run_job(): adb("shell", "cmd", "jobscheduler", "run", "-f", PKG, "7")
 
 def real_fcm(now):
     """Справжній push через Google (Firebase) на тестову тему — лише де є сервіси Google Play і ключ у FCM_SA."""
-    sub = [m for t, m in LOG if "PUSH підписка o_" in m]
+    end = time.time() + (90 if os.environ.get("FCM_SA") else 0)
+    while True:   # підписка на тему — асинхронна, може з'явитися за хвилину після запуску
+        sub = [m for t, m in LOG if "PUSH підписка o_" in m]
+        if sub or time.time() > end or any("PUSH підписка не вдалася" in m or "PUSH недоступний" in m for t, m in LOG): break
+        time.sleep(2)
     if not os.environ.get("FCM_SA") or not sub:
         print("::notice title=Play FCM::справжній push не перевірявся (%s)" % ("немає ключа" if not os.environ.get("FCM_SA") else "в емуляторі немає сервісів Google Play"), flush=True)
         return
