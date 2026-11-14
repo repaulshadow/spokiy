@@ -17,7 +17,7 @@ LOG = []
 def adb(*a): return subprocess.run(["adb"] + list(a), capture_output=True, text=True, encoding="utf-8", errors="replace").stdout
 def step(name, ok, detail="", latency=None): e2e.step(name, ok, detail, latency)
 def reader():
-    p = subprocess.Popen(["adb", "logcat", "-v", "brief", "Trevoga:I", "AndroidRuntime:E", "*:S"], stdout=subprocess.PIPE,
+    p = subprocess.Popen(["adb", "logcat", "-v", "brief", "Trevoga:I", "AndroidRuntime:E", "FirebaseMessaging:V", "FirebaseInstallations:V", "*:S"], stdout=subprocess.PIPE,
                          stderr=subprocess.DEVNULL, stdin=subprocess.DEVNULL, text=True, encoding="utf-8", errors="replace")
     for line in p.stdout:
         line = line.rstrip()
@@ -47,13 +47,14 @@ def run_job(): adb("shell", "cmd", "jobscheduler", "run", "-f", PKG, "7")
 
 def real_fcm(now):
     """Справжній push через Google (Firebase) на тестову тему — лише де є сервіси Google Play і ключ у FCM_SA."""
-    end = time.time() + (90 if os.environ.get("FCM_SA") else 0)
+    end = time.time() + (360 if os.environ.get("FCM_SA") and "com.google.android.gms" in adb("shell", "pm", "list", "packages", "com.google.android.gms") else 0)
+    adb("shell", "am", "start", "-n", PKG + "/.MainActivity")   # після force-stop — запустити знову, щоб підписка завершилась
     while True:   # підписка на тему — асинхронна, може з'явитися за хвилину після запуску
         sub = [m for t, m in LOG if "PUSH підписка o_" in m]
         if sub or time.time() > end or any("PUSH підписка не вдалася" in m or "PUSH недоступний" in m for t, m in LOG): break
         time.sleep(2)
     if not os.environ.get("FCM_SA") or not sub:
-        print("::notice title=Play FCM::справжній push не перевірявся (%s)" % ("немає ключа" if not os.environ.get("FCM_SA") else "в емуляторі немає сервісів Google Play"), flush=True)
+        print("::notice title=Play FCM::справжній push не перевірявся (%s)" % ("немає ключа" if not os.environ.get("FCM_SA") else "підписка на тему не завершилась (в емуляторі немає або не готові сервіси Google Play)"), flush=True)
         return
     topic = re.search(r"o_[0-9a-f]+_t", sub[-1])
     step("Тестова тема FCM", topic is not None, sub[-1][-80:])
