@@ -1,0 +1,68 @@
+name: Android (Google Play build)
+
+# Збірка для Google Play (Gradle, Firebase push): тест в емуляторі (тестова збірка проти сервера-імітації)
+# і AAB без підпису → гілка aab-unsigned. Підпис — ключем автора, не на GitHub.
+on: workflow_dispatch
+
+permissions:
+  contents: write
+
+env:
+  PYTHONUTF8: "1"
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - { api: 30, target: default }
+          - { api: 34, target: google_apis }
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.11.1" }
+      - name: Тестова збірка (сервер-імітація)
+        run: |
+          printf '{"server": "http://10.0.2.2:8787", "fixed": true}\n' > android/res/raw/config.json
+          cd android/play && gradle --no-daemon -q assembleDebug
+          ls -la build/outputs/apk/debug/
+      - name: KVM
+        run: |
+          echo 'KERNEL=="kvm", GROUP="kvm", MODE="0666", OPTIONS+="static_node=kvm"' | sudo tee /etc/udev/rules.d/99-kvm4all.rules
+          sudo udevadm control --reload-rules
+          sudo udevadm trigger --name-match=kvm
+      - uses: reactivecircus/android-emulator-runner@v2
+        with:
+          api-level: ${{ matrix.api }}
+          target: ${{ matrix.target }}
+          arch: x86_64
+          disable-animations: true
+          emulator-options: -no-window -gpu swiftshader_indirect -noaudio -no-boot-anim -camera-back none
+          script: timeout 1200 python3 android/test/play_e2e.py android/play/build/outputs/apk/debug/trevoga-play-debug.apk
+
+  bundle:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v5
+      - uses: actions/setup-java@v5
+        with: { distribution: temurin, java-version: "17" }
+      - uses: gradle/actions/setup-gradle@v4
+        with: { gradle-version: "8.11.1" }
+      - name: AAB (без підпису)
+        run: |
+          cp config.json android/res/raw/config.json
+          cd android/play && gradle --no-daemon -q bundleRelease
+          ls -la build/outputs/bundle/release/
+      - name: AAB → гілка aab-unsigned
+        run: |
+          mkdir -p out && cp android/play/build/outputs/bundle/release/*.aab out/Trevoga-play-unsigned.aab
+          echo "versionCode $(cat android/play/VERSION_CODE), $(grep -o 'versionName="[^"]*"' android/AndroidManifest.xml)" > out/info.txt
+          cd out && git init -q -b aab && git add -A
+          git -c user.name=ci -c user.email=ci@localhost commit -qm "unsigned aab $(cat info.txt)"
+          git push -f "https://x-access-token:${{ github.token }}@github.com/${{ github.repository }}" aab:aab-unsigned

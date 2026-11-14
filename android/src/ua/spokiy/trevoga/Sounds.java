@@ -23,6 +23,9 @@ final class Sounds {
     private static int gen = 0;     // меняется при stop() — отменяет очередь «голос → сирена»
     static final int NONE = -1, ALARM = 0, CLEAR = 1, BALLISTIC = 2;
 
+    /** Чи щось зараз звучить (голос або сирена). */
+    static synchronized boolean playing() { return player != null; }
+
     static synchronized void stop() {
         gen++;
         try {

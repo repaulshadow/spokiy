@@ -160,7 +160,8 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
                 prefs.edit().putBoolean(Prefs.ENABLED, on).apply();
                 if (on) MonitorService.start(MainActivity.this);
                 else {
-                    stopService(new Intent(MainActivity.this, MonitorService.class));
+                    if (Flavor.hooks != null) Flavor.hooks.stop(MainActivity.this);
+                    else stopService(new Intent(MainActivity.this, MonitorService.class));
                     prefs.edit().putInt(Prefs.STATE, AlertSource.UNKNOWN).apply();
                 }
                 refresh();
@@ -241,6 +242,10 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         where.addView(autoSwitch);
         autoInfo = text("", 12, MUTED, false);
         where.addView(autoInfo);
+        if (Flavor.PLAY) {   // у версії з Google Play немає постійної служби — район вибирають вручну
+            autoSwitch.setVisibility(View.GONE);
+            autoInfo.setVisibility(View.GONE);
+        }
         updateAutoUi();
         settings.addView(where, matchWrap(dp(12)));
 
@@ -308,7 +313,8 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         });
         LinearLayout.LayoutParams bl = matchWrap(dp(12));
         notif.addView(batt, bl);
-        if (Build.VERSION.SDK_INT >= 26) {
+        if (Flavor.PLAY) batt.setVisibility(View.GONE);   // push доходить і без винятків для батареї
+        if (Build.VERSION.SDK_INT >= 26 && !Flavor.PLAY) {
             // Android вимагає постійне сповіщення для роботи у фоні; його можна сховати в налаштуваннях каналу
             View hide = button("Сховати постійне сповіщення", 0, OUTLINED, new View.OnClickListener() {
                 public void onClick(View v) {
@@ -356,7 +362,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
         upd.addView(button("Перевірити оновлення", 0, OUTLINED, new View.OnClickListener() {
             public void onClick(View v) { checkUpdateNow(); }
         }), matchWrap(dp(8)));
-        settings.addView(upd, matchWrap(dp(12)));
+        if (!Flavor.PLAY) settings.addView(upd, matchWrap(dp(12)));   // у Google Play оновлює магазин
 
         LinearLayout tests = card("Перевірка звуку і сповіщень");
         tests.addView(row, matchWrap(dp(10)));
@@ -626,8 +632,10 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
             prefs.edit().putBoolean(Prefs.MAP_VIEW, i.getBooleanExtra("map", false)).apply();
             applyMode();
         }
+        // лише тестова збірка (сервер-імітація): імітація push для автотесту версії Google Play
+        if (Flavor.hooks != null && i.hasExtra("push") && AlertSource.embeddedFixed(this)) Flavor.hooks.debugPush(this, i.getStringExtra("push"));
         if (i.getAction() == null) return;
-        if (Updater.ACTION_UPDATE.equals(i.getAction())) askUpdate();
+        if (Updater.ACTION_UPDATE.equals(i.getAction()) && !Flavor.PLAY) askUpdate();
     }
 
     private void updateVersionInfo() {
@@ -736,7 +744,7 @@ public class MainActivity extends Activity implements SharedPreferences.OnShared
     }
 
     private void askBattery(boolean force) {
-        if (Build.VERSION.SDK_INT < 23) return;
+        if (Build.VERSION.SDK_INT < 23 || Flavor.PLAY) return;
         PowerManager pm = (PowerManager) getSystemService(Context.POWER_SERVICE);
         if (pm.isIgnoringBatteryOptimizations(getPackageName())) {
             if (force) new AlertDialog.Builder(this)

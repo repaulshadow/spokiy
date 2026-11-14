@@ -58,6 +58,7 @@ public class MonitorService extends Service {
     private final StreamClient ua = new StreamClient("trevoga-ua", "");
 
     static void start(Context c) {
+        if (Flavor.hooks != null) { Flavor.hooks.start(c); return; }
         Intent i = new Intent(c, MonitorService.class);
         if (Build.VERSION.SDK_INT >= 26) c.startForegroundService(i);   // з фону (після перезавантаження) — лише так
         else c.startService(i);
@@ -97,6 +98,7 @@ public class MonitorService extends Service {
     }
 
     static void checkNow(Context c) {
+        if (Flavor.hooks != null) { Flavor.hooks.checkNow(c); return; }
         c.startService(new Intent(c, MonitorService.class).setAction(ACTION_CHECK));
     }
 
@@ -444,8 +446,8 @@ public class MonitorService extends Service {
                 .setContentIntent(PendingIntent.getActivity(ctx, 0, open, Prefs.PI));
         colorize(b, color);
         if (!quiet) {
-            PendingIntent stop = PendingIntent.getService(ctx, 1,
-                    new Intent(ctx, MonitorService.class).setAction(ACTION_STOP_SOUND), Prefs.PI);
+            PendingIntent stop = PendingIntent.getService(ctx, 1, Flavor.hooks != null ? Flavor.hooks.stopSoundIntent(ctx)
+                    : new Intent(ctx, MonitorService.class).setAction(ACTION_STOP_SOUND), Prefs.PI);
             b.addAction(0, "Вимкнути звук", stop);
         } else {
             vibrate(ctx, color);

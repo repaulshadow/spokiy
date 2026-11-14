@@ -1,0 +1,29 @@
+{
+  "project_info": {
+    "project_number": "331684909772",
+    "project_id": "trevoga-spokiy",
+    "storage_bucket": "trevoga-spokiy.firebasestorage.app"
+  },
+  "client": [
+    {
+      "client_info": {
+        "mobilesdk_app_id": "1:331684909772:android:8da6687c70f52dccaa6869",
+        "android_client_info": {
+          "package_name": "ua.spokiy.trevoga"
+        }
+      },
+      "oauth_client": [],
+      "api_key": [
+        {
+          "current_key": "AIzaSyDiv4zuZ8DGT6iHcaNihLn3unyC47p77mc"
+        }
+      ],
+      "services": {
+        "appinvite_service": {
+          "other_platform_oauth_client": []
+        }
+      }
+    }
+  ],
+  "configuration_version": "1"
+}

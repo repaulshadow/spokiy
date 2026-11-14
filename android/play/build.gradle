@@ -1,0 +1,47 @@
+// Збірка «Тривоги» для Google Play (AAB): спільний код і ресурси з ../src та ../res + відмінності Play з ./src.
+// Збірка із сайту (APK) цим файлом не користується — її збирає ../build_ci.sh, як і раніше.
+plugins {
+    id 'com.android.application' version '8.7.3'
+    id 'com.google.gms.google-services' version '4.4.2'
+}
+
+def siteManifest = file('../AndroidManifest.xml').getText('UTF-8')
+def siteName = (siteManifest =~ /android:versionName="([^"]+)"/)[0][1]
+// Номер збірки Play — свій рядок (play/VERSION_CODE), завжди більший за номери APK із сайту
+def playCode = file('VERSION_CODE').text.trim() as int
+
+android {
+    namespace 'ua.spokiy.trevoga'
+    compileSdk 35
+    defaultConfig {
+        applicationId 'ua.spokiy.trevoga'
+        minSdk 21
+        targetSdk 35
+        versionCode playCode
+        versionName siteName
+    }
+    sourceSets {
+        main {
+            manifest.srcFile 'AndroidManifest.xml'
+            java.srcDirs = ['../src', 'src']
+            // Flavor.java із сайту замінює ./src/…/Flavor.java
+            java.filter.exclude { e -> e.file.absolutePath.replace('\\', '/').endsWith('android/src/ua/spokiy/trevoga/Flavor.java') }
+            res.srcDirs = ['../res']
+        }
+    }
+    compileOptions {
+        sourceCompatibility JavaVersion.VERSION_1_8
+        targetCompatibility JavaVersion.VERSION_1_8
+    }
+    buildTypes {
+        release { minifyEnabled false }   // підпис — окремо, ключем автора (не зберігається на GitHub)
+    }
+    lint { abortOnError false; checkReleaseBuilds false }
+}
+
+tasks.withType(JavaCompile).configureEach { options.encoding = 'UTF-8'; options.compilerArgs << '-Xlint:-options' }
+
+dependencies {
+    implementation platform('com.google.firebase:firebase-bom:33.7.0')
+    implementation 'com.google.firebase:firebase-messaging'
+}
