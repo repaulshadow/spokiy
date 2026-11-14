@@ -12,6 +12,7 @@ import java.security.MessageDigest;
 /** Підписка на push своєї області: тема FCM = «o_» + 12 hex SHA-1 від нормалізованої назви (як на сервері, push.js). */
 final class PlayPush {
     static final String TOPIC = "push_topic";   // тема, на яку вже підписано
+    private static volatile String pending;
 
     static String topic(String region) {
         try {
@@ -28,12 +29,15 @@ final class PlayPush {
         final String want = p.getBoolean(Prefs.ENABLED, true) ? topic(Prefs.region(c)) : null;
         final String have = p.getString(TOPIC, null);
         if (want == null ? have == null : want.equals(have)) return;
+        if (want != null && want.equals(pending)) return;   // запит уже надіслано — чекаємо відповіді
         try {
             FirebaseMessaging fm = FirebaseMessaging.getInstance();
             if (have != null) fm.unsubscribeFromTopic(have);
             if (want == null) { p.edit().remove(TOPIC).apply(); MonitorService.L("PUSH відписка"); return; }
+            pending = want;
             fm.subscribeToTopic(want).addOnCompleteListener(new OnCompleteListener<Void>() {
                 public void onComplete(Task<Void> t) {
+                    pending = null;
                     if (t.isSuccessful()) { p.edit().putString(TOPIC, want).apply(); MonitorService.L("PUSH підписка " + want); }
                     else { p.edit().remove(TOPIC).apply(); MonitorService.L("PUSH підписка не вдалася: " + t.getException()); }
                 }

@@ -17,7 +17,8 @@ import java.util.Locale;
  */
 final class PlayCore {
     private static final Engine engine = new Engine();
-    static final String PLACE = "play_place";
+    static final String PLACE = "play_place", PUSH_AT = "push_at";
+    static final long PUSH_GUARD_MS = 30000;
 
     static void checkAsync(Context c) {
         final Context app = c.getApplicationContext();
@@ -43,6 +44,10 @@ final class PlayCore {
         long now = System.currentTimeMillis();
         String time = new SimpleDateFormat("HH:mm:ss", Locale.getDefault()).format(new Date());
 
+        if (ua != null) p.edit().putLong(PUSH_AT, now).apply();
+        // Одразу після push сервер не питаємо: його відповідь кешується на кілька секунд і може бути старішою за push —
+        // вийшов би хибний відбій (напр., коли людина відкриває програму зі сповіщення про тривогу)
+        else if (Math.abs(now - p.getLong(PUSH_AT, 0)) < PUSH_GUARD_MS) return;
         if (ua == null) {
             String server = AlertSource.server(ctx);
             try { engine.serverOk(AlertSource.fetchRoot(server), now); }

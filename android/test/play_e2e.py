@@ -87,6 +87,13 @@ def main():
     step("Служба звуку зупинилась сама", "PlaySoundService" not in services())
     # 6. Push пропущено — тривогу знаходить запасне опитування (програма згорнута): сповіщення й вібрація, без сирени
     adb("shell", "input", "keyevent", "KEYCODE_HOME"); time.sleep(2)
+    # одразу після push опитування пропускається (захист від застарілої відповіді сервера)
+    m = mark(); t0 = time.time(); push({"r": [], "o": [], "c": []}); time.sleep(2)
+    adb("shell", "input", "keyevent", "KEYCODE_HOME"); time.sleep(1)
+    change(lambda: W.ua_o.__setitem__(KYIV, "red")); time.sleep(3); run_job()
+    expect_none("Одразу після push опитування не перебиває його", r"STATE", 8, m)
+    change(lambda: W.ua_o.clear())
+    time.sleep(max(0, 34 - (time.time() - t0)))
     m = mark(); change(lambda: W.ua_o.__setitem__(KYIV, "red")); time.sleep(3); run_job()
     expect("Опитування: тривога без push", r"STATE Alert", 30, m)
     expect("Опитування: лише сповіщення (Android не дозволяє звук із фону)", r"SOUND alarm \(без звуку", 5, m)
